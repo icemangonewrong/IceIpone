@@ -123,7 +123,7 @@ private struct PlayerView: View {
                     Slider(value: Binding(
                         get: { scrubbing ? scrubValue : playback.currentTime },
                         set: { scrubValue = $0 }
-                    ), in: 0...max(playback.duration, 1)) { editing in
+                    ), in: 0...max(playback.duration, 1), onEditingChanged: { editing in
                         if editing {
                             scrubValue = playback.currentTime
                             scrubbing = true
@@ -133,7 +133,7 @@ private struct PlayerView: View {
                             scrubbing = false
                             scheduleHide()
                         }
-                    }
+                    })
                     .tint(.orange)
 
                     HStack {
