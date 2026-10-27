@@ -1,0 +1,255 @@
+import UIKit
+import CarPlay
+import AVFoundation
+import Combine
+
+/// CarPlay screen. Only appears in the car when the app is installed with a CarPlay
+/// entitlement (the jailbreak/TrollStore build). With a normal sideload it never runs.
+///
+/// It registers as a navigation-style app, which is the only kind that gets a raw
+/// drawing window on the car display. The video is drawn in that window, and
+/// browsing uses CarPlay's built-in list screens.
+final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate {
+    private var interfaceController: CPInterfaceController?
+    private var carWindow: CPWindow?
+    private var mapTemplate: CPMapTemplate?
+    private var playPauseButton: CPMapButton?
+    private var cancellables = Set<AnyCancellable>()
+
+    private var app: AppState { AppState.shared }
+    private var playback: PlaybackManager { PlaybackManager.shared }
+
+    // MARK: - Connect / disconnect
+
+    func templateApplicationScene(_ templateApplicationScene: CPTemplateApplicationScene,
+                                  didConnect interfaceController: CPInterfaceController,
+                                  to window: CPWindow) {
+        self.interfaceController = interfaceController
+        self.carWindow = window
+
+        window.rootViewController = CarVideoViewController()
+        playback.carScreenActive = true
+
+        let map = CPMapTemplate()
+        map.automaticallyHidesNavigationBar = false
+        map.leadingNavigationBarButtons = [
+            CPBarButton(title: "Browse") { [weak self] _ in self?.showBrowse() },
+        ]
+        map.trailingNavigationBarButtons = [
+            CPBarButton(title: "Stop") { [weak self] _ in
+                Task { await self?.playback.stop() }
+            },
+        ]
+
+        let back = CPMapButton { [weak self] _ in self?.playback.skip(-15) }
+        back.image = UIImage(systemName: "gobackward.15")
+        let playPause = CPMapButton { [weak self] _ in self?.playback.togglePlayPause() }
+        playPause.image = UIImage(systemName: "playpause.fill")
+        let forward = CPMapButton { [weak self] _ in self?.playback.skip(30) }
+        forward.image = UIImage(systemName: "goforward.30")
+        map.mapButtons = [back, playPause, forward]
+        playPauseButton = playPause
+
+        mapTemplate = map
+        interfaceController.setRootTemplate(map, animated: false, completion: nil)
+
+        playback.$isPlaying
+            .receive(on: RunLoop.main)
+            .sink { [weak self] playing in
+                self?.playPauseButton?.image = UIImage(systemName: playing ? "pause.fill" : "play.fill")
+            }
+            .store(in: &cancellables)
+    }
+
+    func templateApplicationScene(_ templateApplicationScene: CPTemplateApplicationScene,
+                                  didDisconnect interfaceController: CPInterfaceController,
+                                  from window: CPWindow) {
+        cancellables.removeAll()
+        playback.carScreenActive = false
+        // Leave it playing on the phone? Safer to pause when the car disconnects.
+        if playback.isPlaying { playback.togglePlayPause() }
+        self.interfaceController = nil
+        self.carWindow = nil
+        self.mapTemplate = nil
+    }
+
+    // MARK: - Browsing
+
+    private func showBrowse() {
+        Task {
+            if app.sections.isEmpty { await app.refreshHome() }
+            else { await app.refreshContinueWatching() }
+
+            var sections: [CPListSection] = []
+
+            let cw = Array(app.continueWatching.prefix(12)).map { makeItemRow($0) }
+            if !cw.isEmpty {
+                sections.append(CPListSection(items: cw, header: "Continue Watching", sectionIndexTitle: nil))
+            }
+
+            let libs: [CPListItem] = app.visibleSections.map { section in
+                let row = CPListItem(text: section.title, detailText: nil,
+                                     image: UIImage(systemName: section.type == "show" ? "tv" : "film"))
+                row.accessoryType = .disclosureIndicator
+                row.handler = { [weak self] _, done in
+                    self?.showLibrary(section)
+                    done()
+                }
+                return row
+            }
+            if !libs.isEmpty {
+                sections.append(CPListSection(items: libs, header: "Libraries", sectionIndexTitle: nil))
+            }
+            if sections.isEmpty {
+                let empty = CPListItem(text: app.server == nil ? "Sign in on your phone first" : "Nothing here yet",
+                                       detailText: nil)
+                sections.append(CPListSection(items: [empty]))
+            }
+
+            let list = CPListTemplate(title: "CarPlex", sections: sections)
+            interfaceController?.pushTemplate(list, animated: true, completion: nil)
+        }
+    }
+
+    private func showLibrary(_ section: PlexSection) {
+        let client = app.client
+        Task {
+            async let recentTask = client.recentlyAdded(section: section.key, count: 25)
+            async let allTask = client.items(section: section.key, sort: "titleSort",
+                                                 unwatchedOnly: false, start: 0,
+                                                 size: max(CPListTemplate.maximumItemCount - 25, 25))
+            let recent = (try? await recentTask) ?? []
+            let all = (try? await allTask)?.items ?? []
+
+            var sections: [CPListSection] = []
+            if !recent.isEmpty {
+                sections.append(CPListSection(items: recent.map { makeItemRow($0) },
+                                              header: "Recently Added", sectionIndexTitle: nil))
+            }
+            if !all.isEmpty {
+                sections.append(CPListSection(items: all.map { makeItemRow($0) },
+                                              header: "A–Z", sectionIndexTitle: nil))
+            }
+            let list = CPListTemplate(title: section.title, sections: sections)
+            interfaceController?.pushTemplate(list, animated: true, completion: nil)
+        }
+    }
+
+    private func showChildren(of item: PlexItem) {
+        Task {
+            let kids = (try? await app.client.children(of: item.ratingKey.value)) ?? []
+            var rows: [CPListItem] = []
+            if item.type == "show" {
+                let next = CPListItem(text: "Play next episode", detailText: nil,
+                                      image: UIImage(systemName: "play.fill"))
+                next.handler = { [weak self] _, done in
+                    self?.startPlayback(item)
+                    done()
+                }
+                rows.append(next)
+            }
+            rows.append(contentsOf: kids.map { makeItemRow($0) })
+            let list = CPListTemplate(title: item.title ?? "", sections: [CPListSection(items: rows)])
+            interfaceController?.pushTemplate(list, animated: true, completion: nil)
+        }
+    }
+
+    /// One row in a CarPlay list. Playable items start playing; shows/seasons drill down.
+    private func makeItemRow(_ item: PlexItem) -> CPListItem {
+        let title = item.type == "episode" ? (item.title ?? "") : item.displayTitle
+        var detail: String? = item.type == "episode" ? "\(item.displayTitle) · \(item.displaySubtitle ?? "")" : item.displaySubtitle
+        if let p = item.progress { detail = (detail.map { $0 + " · " } ?? "") + "\(Int(p * 100))% watched" }
+
+        let row = CPListItem(text: title, detailText: detail)
+        if let p = item.progress {
+            row.playbackProgress = CGFloat(p)
+        }
+        if item.isWatched { row.accessoryType = .none }
+        if !item.isPlayable { row.accessoryType = .disclosureIndicator }
+
+        row.handler = { [weak self] _, done in
+            if item.isPlayable { self?.startPlayback(item) }
+            else { self?.showChildren(of: item) }
+            done()
+        }
+
+        // Load the poster in the background.
+        if let url = app.client.imageURL(item.posterPath, width: 120, height: 180) {
+            Task.detached {
+                if let result = try? await URLSession.shared.data(from: url),
+                   let img = UIImage(data: result.0) {
+                    await MainActor.run { row.setImage(img) }
+                }
+            }
+        }
+        return row
+    }
+
+    private func startPlayback(_ item: PlexItem) {
+        Task {
+            await playback.play(item)
+            interfaceController?.popToRootTemplate(animated: true, completion: nil)
+        }
+    }
+}
+
+// MARK: - The video on the car screen
+
+final class CarVideoViewController: UIViewController {
+    private let playerLayer = AVPlayerLayer()
+    private let idleLabel = UILabel()
+    private let statusLabel = UILabel()
+    private var cancellables = Set<AnyCancellable>()
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        view.backgroundColor = .black
+
+        playerLayer.videoGravity = .resizeAspect
+        view.layer.addSublayer(playerLayer)
+
+        idleLabel.text = "CarPlex\nTap Browse to pick something"
+        idleLabel.numberOfLines = 0
+        idleLabel.textAlignment = .center
+        idleLabel.textColor = .lightGray
+        idleLabel.font = .systemFont(ofSize: 22, weight: .semibold)
+
+        statusLabel.textAlignment = .center
+        statusLabel.textColor = .systemYellow
+        statusLabel.font = .systemFont(ofSize: 20, weight: .bold)
+        statusLabel.numberOfLines = 0
+
+        for l in [idleLabel, statusLabel] {
+            l.translatesAutoresizingMaskIntoConstraints = false
+            view.addSubview(l)
+            NSLayoutConstraint.activate([
+                l.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+                l.leadingAnchor.constraint(greaterThanOrEqualTo: view.leadingAnchor, constant: 20),
+            ])
+        }
+        idleLabel.centerYAnchor.constraint(equalTo: view.centerYAnchor).isActive = true
+        statusLabel.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -16).isActive = true
+
+        let pb = PlaybackManager.shared
+        pb.$player
+            .receive(on: RunLoop.main)
+            .sink { [weak self] player in
+                self?.playerLayer.player = player
+                self?.idleLabel.isHidden = player != nil
+            }
+            .store(in: &cancellables)
+
+        pb.$heldForMotion.combineLatest(pb.$errorMessage)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] held, error in
+                if held { self?.statusLabel.text = "Paused while moving" }
+                else { self?.statusLabel.text = error }
+            }
+            .store(in: &cancellables)
+    }
+
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        playerLayer.frame = view.bounds
+    }
+}
