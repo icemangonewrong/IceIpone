@@ -3,18 +3,25 @@ options:
   bundleIdPrefix: com.iceman
   deploymentTarget:
     iOS: "17.0"
+packages:
+  VLCKitSPM:
+    url: https://github.com/tylerjonesio/vlckit-spm
+    exactVersion: 3.6.0
 targets:
   CarPlex:
     type: application
     platform: iOS
+    scheme: {}
     sources:
       - Sources
+    dependencies:
+      - package: VLCKitSPM
     info:
       path: Info.plist
       properties:
         CFBundleDisplayName: CarPlex
-        CFBundleShortVersionString: "1.1"
-        CFBundleVersion: "2"
+        CFBundleShortVersionString: "2.0"
+        CFBundleVersion: "4"
         ITSAppUsesNonExemptEncryption: false
         UILaunchScreen: {}
         UIUserInterfaceStyle: Dark

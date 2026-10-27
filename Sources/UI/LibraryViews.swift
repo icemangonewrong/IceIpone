@@ -67,7 +67,7 @@ struct LibraryGridView: View {
                 }
             }
             .padding()
-            if loading { ProgressView().padding() }
+            if loading { OrangeSpinner().padding() }
             if let error { Text(error).foregroundStyle(.red) }
         }
         .navigationTitle(section.title)
@@ -206,7 +206,7 @@ struct ChildrenListView: View {
                 }
             }
         }
-        .overlay { if loading { ProgressView() } }
+        .overlay { if loading { OrangeSpinner() } }
         .navigationTitle(title)
         .task { await load() }
         .refreshable { await load() }

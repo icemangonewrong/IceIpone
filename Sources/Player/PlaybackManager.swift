@@ -1,21 +1,38 @@
 import Foundation
+import UIKit
 import AVFoundation
 import MediaPlayer
 import CoreLocation
+import VLCKitSPM
 
 /// One player shared by the phone UI and the CarPlay screen.
-/// Handles resume position, progress reporting to Plex, and "mark watched".
+///
+/// Plays the original file (true direct play, like the Plex app) with VLC, through
+/// `StreamProxy`, which keeps minutes of video cached on the phone so dead zones don't
+/// stop playback. Also handles resume, progress sync to Plex and "mark watched".
 @MainActor
 final class PlaybackManager: NSObject, ObservableObject {
     static let shared = PlaybackManager()
 
-    @Published private(set) var player: AVPlayer?
+    struct Track: Identifiable, Hashable {
+        let id: Int32
+        let name: String
+    }
+
+    /// A video is loaded (playing, paused or loading).
+    @Published private(set) var isActive = false
     @Published private(set) var current: PlexItem?
     @Published private(set) var isPlaying = false
     @Published private(set) var isBuffering = false
     @Published private(set) var currentTime: Double = 0
     @Published private(set) var duration: Double = 0
+    /// Seconds of video downloaded past the current position.
+    @Published private(set) var bufferedAhead: Double = 0
     @Published private(set) var errorMessage: String?
+    /// The download from Plex is failing (no signal). Playback continues from the cache.
+    @Published private(set) var offline = false
+    /// Out of signal AND out of cached video: we're waiting for coverage.
+    @Published private(set) var waitingForSignal = false
     /// Whether the phone's player screen should be showing (stays up between episodes).
     @Published var showPlayerUI = false
     /// True when the CarPlay screen (jailbreak build) is showing the video.
@@ -25,14 +42,28 @@ final class PlaybackManager: NSObject, ObservableObject {
     /// True while playback is held because the vehicle is moving.
     @Published private(set) var heldForMotion = false
 
-    private var session = UUID().uuidString
-    private var timeObserver: Any?
-    private var statusObservation: NSKeyValueObservation?
-    private var rateObservation: NSKeyValueObservation?
+    /// The view VLC draws into. It moves between the phone and car screens.
+    let videoView: UIView = {
+        let v = UIView()
+        v.backgroundColor = .black
+        v.isUserInteractionEnabled = false
+        return v
+    }()
+
+    private var vlc: VLCMediaPlayer?
+    private var proxy: StreamProxy?
+    private var mediaURL: URL?
     private var reportTimer: Timer?
-    private var endObserver: NSObjectProtocol?
-    private var pendingResumeSeconds: Double = 0
+    private var watchdog: Timer?
     private let location = CLLocationManager()
+
+    /// What the user wants (playing vs paused).
+    private var wantsPlay = false
+    private var lastProgress = Date()
+    private var lastTimeValue: Double = -1
+    private var hasPlayedSinceStart = false
+    private var restartsWithoutPlaying = 0
+    private var restartPending = false
 
     private var state: AppState { AppState.shared }
     private var client: PlexClient { AppState.shared.client }
@@ -57,95 +88,90 @@ final class PlaybackManager: NSObject, ObservableObject {
             }
             target = next
         }
-        // Only fetch details if the list didn't include file info (saves a round trip).
-        if target.Media == nil, let fresh = try? await client.metadata(target.ratingKey.value) { target = fresh }
+        // Lists usually include the file details; only look them up if missing.
+        if target.firstPart?.key == nil || target.firstPart?.size == nil,
+           let fresh = try? await client.metadata(target.ratingKey.value) {
+            target = fresh
+        }
 
         await stop(reportOnly: true)
 
-        session = UUID().uuidString
-        guard let url = client.streamURL(for: target, quality: state.quality, session: session) else {
-            errorMessage = "Couldn't build a stream address."
+        guard let remote = client.directURL(for: target) else {
+            errorMessage = "Couldn't find the file for this video."
             return
         }
 
-        let avItem = AVPlayerItem(url: url)
-        let newPlayer = AVPlayer(playerItem: avItem)
-        newPlayer.allowsExternalPlayback = true
-        avItem.preferredForwardBufferDuration = 0  // let AVPlayer start as soon as it can
-
         current = target
         duration = Double(target.duration ?? 0) / 1000
-        currentTime = 0
-        pendingResumeSeconds = fromStart ? 0 : Double(target.viewOffset ?? 0) / 1000
-        // Don't resume in the last 2 minutes; start over instead.
-        if duration > 0, pendingResumeSeconds > duration - 120 { pendingResumeSeconds = 0 }
+        var resume = fromStart ? 0 : Double(target.viewOffset ?? 0) / 1000
+        if duration > 0, resume > duration - 120 { resume = 0 }  // nearly done: start over
+        currentTime = resume
+        hasPlayedSinceStart = false
+        restartsWithoutPlaying = 0
+        isActive = true
+        isBuffering = true
 
-        statusObservation = avItem.observe(\.status, options: [.new]) { [weak self] item, _ in
-            Task { @MainActor in self?.itemStatusChanged(item) }
-        }
-        rateObservation = newPlayer.observe(\.timeControlStatus, options: [.new]) { [weak self] p, _ in
-            Task { @MainActor in
-                self?.isPlaying = p.timeControlStatus != .paused
-                self?.isBuffering = p.timeControlStatus == .waitingToPlayAtSpecifiedRate
-                self?.updateNowPlaying()
+        // Route through the on-phone cache when we know the file size (almost always).
+        var url = remote
+        if let size = target.firstPart?.size, size > 0, duration > 0 {
+            let p = StreamProxy(remote: remote, size: size, duration: duration,
+                                aheadSeconds: Double(state.bufferMinutes * 60),
+                                container: target.container)
+            if let local = try? await p.start() {
+                proxy = p
+                url = local
+            } else {
+                DispatchQueue.global(qos: .utility).async { p.stop() }  // fall back to streaming straight from Plex
             }
         }
-        timeObserver = newPlayer.addPeriodicTimeObserver(forInterval: CMTime(seconds: 1, preferredTimescale: 1),
-                                                         queue: .main) { [weak self] t in
-            Task { @MainActor in self?.timeTick(t.seconds) }
-        }
-        endObserver = NotificationCenter.default.addObserver(forName: .AVPlayerItemDidPlayToEndTime,
-                                                             object: avItem, queue: .main) { [weak self] _ in
-            Task { @MainActor in await self?.finished() }
-        }
+        mediaURL = url
 
-        if pendingResumeSeconds > 1 {
-            currentTime = pendingResumeSeconds
-            newPlayer.seek(to: CMTime(seconds: pendingResumeSeconds, preferredTimescale: 600),
-                           toleranceBefore: CMTime(seconds: 5, preferredTimescale: 1),
-                           toleranceAfter: .zero,
-                           completionHandler: { _ in })
-            pendingResumeSeconds = 0
-        }
-
-        player = newPlayer
-        isBuffering = true
-        if !heldForMotion { newPlayer.play() }
-        startReporting()
+        wantsPlay = !heldForMotion
+        startVLC(at: resume)
+        startTimers()
         updateNowPlaying()
     }
 
     /// Stops playback and saves the position to Plex.
     func stop(reportOnly: Bool = false) async {
         if !reportOnly { showPlayerUI = false }
-        guard let player, let item = current else { return }
+        guard isActive, let item = current else {
+            isActive = false
+            return
+        }
         let t = currentTime
         reportTimer?.invalidate()
         reportTimer = nil
-        player.pause()
-        if let o = timeObserver { player.removeTimeObserver(o) }
-        timeObserver = nil
-        statusObservation = nil
-        rateObservation = nil
-        if let e = endObserver { NotificationCenter.default.removeObserver(e) }
-        endObserver = nil
+        watchdog?.invalidate()
+        watchdog = nil
 
-        self.player = nil
-        self.current = nil
+        vlc?.delegate = nil
+        vlc?.stop()
+        vlc = nil
+        let oldProxy = proxy
+        proxy = nil
+        mediaURL = nil
+        DispatchQueue.global(qos: .utility).async { oldProxy?.stop() }
+
+        isActive = false
+        current = nil
         isPlaying = false
+        isBuffering = false
+        offline = false
+        waitingForSignal = false
+        bufferedAhead = 0
+        wantsPlay = false
+        restartPending = false
         MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
 
-        isBuffering = false
         let durMs = Int(duration * 1000)
         let watched = duration > 0 && t / duration > 0.9
-        let oldSession = session
         let c = client
         let refresh = !reportOnly
         // Report in the background so the next video doesn't wait on these calls.
         Task {
             await c.reportTimeline(item: item, state: "stopped", timeMs: Int(t * 1000), durationMs: durMs)
             if watched { await c.markWatched(item.ratingKey.value) }
-            await c.stopTranscode(session: oldSession)
             if refresh { await AppState.shared.refreshContinueWatching() }
         }
     }
@@ -153,13 +179,17 @@ final class PlaybackManager: NSObject, ObservableObject {
     // MARK: - Controls
 
     func togglePlayPause() {
-        guard let player else { return }
-        if player.timeControlStatus == .paused {
-            if heldForMotion { return }
-            player.play()
+        guard let vlc else { return }
+        if wantsPlay {
+            wantsPlay = false
+            vlc.pause()
         } else {
-            player.pause()
+            if heldForMotion { return }
+            wantsPlay = true
+            vlc.play()
         }
+        isPlaying = wantsPlay
+        lastProgress = Date()
         reportNow()
     }
 
@@ -168,46 +198,155 @@ final class PlaybackManager: NSObject, ObservableObject {
     }
 
     func seek(to seconds: Double) {
-        guard let player else { return }
-        let clamped = max(0, duration > 0 ? min(seconds, duration - 1) : seconds)
-        player.seek(to: CMTime(seconds: clamped, preferredTimescale: 600))
+        guard let vlc else { return }
+        let clamped = max(0, duration > 0 ? min(seconds, duration - 2) : seconds)
+        vlc.time = VLCTime(int: Int32(clamped * 1000))
         currentTime = clamped
+        lastProgress = Date()
         reportNow()
     }
 
-    // MARK: - Internals
+    // MARK: - Audio & subtitle tracks
 
-    private func itemStatusChanged(_ item: AVPlayerItem) {
-        switch item.status {
-        case .readyToPlay:
-            if pendingResumeSeconds > 1 {
-                player?.seek(to: CMTime(seconds: pendingResumeSeconds, preferredTimescale: 600))
-                currentTime = pendingResumeSeconds
-                pendingResumeSeconds = 0
-            }
-            let d = item.duration.seconds
-            if d.isFinite, d > 0 { duration = d }
-        case .failed:
-            errorMessage = item.error?.localizedDescription ?? "Playback failed."
-        default:
-            break
+    var audioTracks: [Track] { tracks(indexes: vlc?.audioTrackIndexes, names: vlc?.audioTrackNames) }
+    var subtitleTracks: [Track] { tracks(indexes: vlc?.videoSubTitlesIndexes, names: vlc?.videoSubTitlesNames) }
+    var currentAudioTrack: Int32 { vlc?.currentAudioTrackIndex ?? -1 }
+    var currentSubtitleTrack: Int32 { vlc?.currentVideoSubTitleIndex ?? -1 }
+
+    func selectAudioTrack(_ id: Int32) {
+        vlc?.currentAudioTrackIndex = id
+        objectWillChange.send()
+    }
+
+    func selectSubtitleTrack(_ id: Int32) {
+        vlc?.currentVideoSubTitleIndex = id
+        objectWillChange.send()
+    }
+
+    private func tracks(indexes: [Any]?, names: [Any]?) -> [Track] {
+        guard let indexes, let names else { return [] }
+        return zip(indexes, names).compactMap { idx, name in
+            guard let n = idx as? NSNumber else { return nil }
+            return Track(id: n.int32Value, name: (name as? String) ?? "Track \(n.intValue)")
         }
     }
 
-    private func timeTick(_ seconds: Double) {
-        if seconds.isFinite { currentTime = seconds }
+    // MARK: - VLC
+
+    private func startVLC(at seconds: Double) {
+        guard let url = mediaURL else { return }
+        let player = VLCMediaPlayer()
+        player.delegate = self
+        player.drawable = videoView
+
+        let media = VLCMedia(url: url)
+        // The cache server is local, so VLC itself only needs a short buffer; starts fast.
+        media.addOption(":network-caching=1200")
+        if seconds > 1 { media.addOption(":start-time=\(Int(seconds))") }
+        player.media = media
+        vlc = player
+
+        lastProgress = Date()
+        lastTimeValue = -1
+        player.play()
+        if !wantsPlay {
+            // VLC needs play() to open the file; pause right after if we're held.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                guard let self, !self.wantsPlay else { return }
+                self.vlc?.pause()
+            }
+        }
     }
 
-    private func startReporting() {
+    /// Something went wrong inside VLC. Reopen at the same spot (the cache still has the data).
+    private func restartVLC() {
+        guard isActive, !restartPending else { return }
+        if !hasPlayedSinceStart {
+            restartsWithoutPlaying += 1
+            if restartsWithoutPlaying > 3 {
+                errorMessage = "This video couldn't be played."
+                return
+            }
+        }
+        restartPending = true
+        let at = currentTime
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+            guard let self, self.isActive, self.restartPending else { return }
+            self.restartPending = false
+            self.vlc?.delegate = nil
+            self.vlc?.stop()
+            self.vlc = nil
+            self.startVLC(at: at)
+        }
+    }
+
+    fileprivate func vlcStateChanged() {
+        guard let p = vlc else { return }
+        switch p.state {
+        case .playing:
+            hasPlayedSinceStart = true
+            restartsWithoutPlaying = 0
+            if !wantsPlay || heldForMotion { p.pause() }
+            if duration <= 0, let len = p.media?.length.intValue, len > 0 { duration = Double(len) / 1000 }
+        case .ended:
+            if duration > 0 && currentTime >= duration - 20 {
+                Task { await finished() }
+            } else {
+                restartVLC()  // ended early: data hiccup, not the real end
+            }
+        case .error:
+            restartVLC()
+        default:
+            break
+        }
+        isPlaying = wantsPlay
+        updateNowPlaying()
+    }
+
+    fileprivate func vlcTimeChanged() {
+        guard let p = vlc, let ms = p.time.value?.doubleValue else { return }
+        let t = ms / 1000
+        if t > 0 {
+            if abs(t - lastTimeValue) > 0.01 { lastProgress = Date() }
+            lastTimeValue = t
+            currentTime = t
+        }
+    }
+
+    // MARK: - Timers
+
+    private func startTimers() {
         reportTimer?.invalidate()
         reportTimer = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.reportNow() }
         }
+        watchdog?.invalidate()
+        watchdog = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.watchdogTick() }
+        }
+    }
+
+    /// Every second: buffer readout, buffering spinner, signal status.
+    private func watchdogTick() {
+        guard isActive else { return }
+        if let snap = proxy?.snapshot() {
+            bufferedAhead = Double(snap.bufferedBytes) / snap.bytesPerSecond
+            offline = snap.offline
+        }
+        let stalled = wantsPlay && !heldForMotion && Date().timeIntervalSince(lastProgress) > 1.5
+        isBuffering = stalled
+        waitingForSignal = stalled && offline
+        // VLC sometimes gives up after a long dead zone. If it's been stuck a long time
+        // and data is available again, reopen it at the same spot.
+        if stalled && !offline && hasPlayedSinceStart && bufferedAhead > 5
+            && Date().timeIntervalSince(lastProgress) > 15 {
+            restartVLC()
+        }
     }
 
     private func reportNow() {
-        guard let item = current, let player else { return }
-        let st = player.timeControlStatus == .paused ? "paused" : "playing"
+        guard let item = current, isActive, !offline else { updateNowPlaying(); return }
+        let st = wantsPlay ? "playing" : "paused"
         let t = Int(currentTime * 1000)
         let d = Int(duration * 1000)
         Task { await client.reportTimeline(item: item, state: st, timeMs: t, durationMs: d) }
@@ -243,11 +382,11 @@ final class PlaybackManager: NSObject, ObservableObject {
     private func setupRemoteCommands() {
         let c = MPRemoteCommandCenter.shared()
         c.playCommand.addTarget { [weak self] _ in
-            Task { @MainActor in if self?.isPlaying == false { self?.togglePlayPause() } }
+            Task { @MainActor in if self?.wantsPlay == false { self?.togglePlayPause() } }
             return .success
         }
         c.pauseCommand.addTarget { [weak self] _ in
-            Task { @MainActor in if self?.isPlaying == true { self?.togglePlayPause() } }
+            Task { @MainActor in if self?.wantsPlay == true { self?.togglePlayPause() } }
             return .success
         }
         c.togglePlayPauseCommand.addTarget { [weak self] _ in
@@ -277,7 +416,7 @@ final class PlaybackManager: NSObject, ObservableObject {
             MPMediaItemPropertyTitle: item.type == "episode" ? (item.title ?? "") : item.displayTitle,
             MPNowPlayingInfoPropertyElapsedPlaybackTime: currentTime,
             MPMediaItemPropertyPlaybackDuration: duration,
-            MPNowPlayingInfoPropertyPlaybackRate: isPlaying ? 1.0 : 0.0,
+            MPNowPlayingInfoPropertyPlaybackRate: wantsPlay ? 1.0 : 0.0,
             MPNowPlayingInfoPropertyMediaType: MPNowPlayingInfoMediaType.video.rawValue,
         ]
         if item.type == "episode" { info[MPMediaItemPropertyArtist] = item.displayTitle + " · " + (item.displaySubtitle ?? "") }
@@ -304,10 +443,22 @@ final class PlaybackManager: NSObject, ObservableObject {
         let moving = metersPerSecond > 3
         if moving && !heldForMotion {
             heldForMotion = true
-            player?.pause()
+            wantsPlay = false
+            isPlaying = false
+            vlc?.pause()
         } else if !moving && heldForMotion {
             heldForMotion = false
         }
+    }
+}
+
+extension PlaybackManager: VLCMediaPlayerDelegate {
+    nonisolated func mediaPlayerStateChanged(_ aNotification: Notification) {
+        Task { @MainActor in self.vlcStateChanged() }
+    }
+
+    nonisolated func mediaPlayerTimeChanged(_ aNotification: Notification) {
+        Task { @MainActor in self.vlcTimeChanged() }
     }
 }
 

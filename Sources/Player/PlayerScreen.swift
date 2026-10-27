@@ -1,5 +1,5 @@
 import SwiftUI
-import AVKit
+import UIKit
 
 /// Full-screen player on the phone. When video is on the car screen, shows remote controls instead.
 struct PlayerScreen: View {
@@ -12,19 +12,19 @@ struct PlayerScreen: View {
             if playback.carScreenActive {
                 CarRemoteView()
                     .overlay(alignment: .topLeading) { CloseButton().padding() }
-            } else if let player = playback.player {
-                PlayerView(player: player)
+            } else if playback.isActive {
+                PlayerView()
             } else if let err = playback.errorMessage {
                 ErrorPanel(message: err)
             } else {
-                ProgressView().tint(.white).controlSize(.large)
+                OrangeSpinner(size: 56)
                 CloseButton()
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                     .padding()
             }
         }
         .preferredColorScheme(.dark)
-        .statusBarHidden(playback.player != nil && !playback.carScreenActive)
+        .statusBarHidden(playback.isActive && !playback.carScreenActive)
     }
 }
 
@@ -32,7 +32,6 @@ struct PlayerScreen: View {
 
 private struct PlayerView: View {
     @EnvironmentObject var playback: PlaybackManager
-    let player: AVPlayer
 
     @State private var controlsVisible = true
     @State private var hideTask: Task<Void, Never>?
@@ -41,7 +40,7 @@ private struct PlayerView: View {
 
     var body: some View {
         ZStack {
-            VideoLayerView(player: player)
+            VideoHost()
                 .ignoresSafeArea()
 
             // Tap anywhere to show/hide controls.
@@ -53,8 +52,27 @@ private struct PlayerView: View {
                     scheduleHide()
                 }
 
-            if playback.isBuffering && !scrubbing {
-                ProgressView().tint(.white).controlSize(.large)
+            if playback.waitingForSignal {
+                VStack(spacing: 14) {
+                    OrangeSpinner(size: 56)
+                    Text("No signal — will pick up where it left off")
+                        .font(.callout.weight(.semibold))
+                        .padding(.horizontal, 14).padding(.vertical, 8)
+                        .background(.black.opacity(0.6), in: Capsule())
+                }
+            } else if playback.isBuffering && !scrubbing {
+                OrangeSpinner(size: 56)
+            }
+
+            if playback.offline && !playback.waitingForSignal {
+                Label("No signal · playing from \(timeString(playback.bufferedAhead)) saved",
+                      systemImage: "antenna.radiowaves.left.and.right.slash")
+                    .font(.caption.weight(.semibold))
+                    .padding(.horizontal, 12).padding(.vertical, 6)
+                    .background(.black.opacity(0.6), in: Capsule())
+                    .frame(maxHeight: .infinity, alignment: .top)
+                    .padding(.top, controlsVisible ? 64 : 12)
+                    .allowsHitTesting(false)
             }
 
             if controlsVisible {
@@ -94,8 +112,7 @@ private struct PlayerView: View {
                         }
                     }
                     Spacer()
-                    RoutePicker()
-                        .frame(width: 44, height: 44)
+                    TracksMenu(onOpen: { hideTask?.cancel() })
                 }
                 .padding(.horizontal)
 
@@ -120,24 +137,26 @@ private struct PlayerView: View {
 
                 // Scrubber
                 VStack(spacing: 6) {
-                    Slider(value: Binding(
-                        get: { scrubbing ? scrubValue : playback.currentTime },
-                        set: { scrubValue = $0 }
-                    ), in: 0...max(playback.duration, 1), onEditingChanged: { editing in
-                        if editing {
-                            scrubValue = playback.currentTime
-                            scrubbing = true
-                            hideTask?.cancel()
+                    ScrubBar(current: playback.currentTime,
+                             buffered: playback.bufferedAhead,
+                             duration: playback.duration) { time, dragging in
+                        scrubValue = time
+                        if dragging {
+                            if !scrubbing { scrubbing = true; hideTask?.cancel() }
                         } else {
-                            playback.seek(to: scrubValue)
+                            playback.seek(to: time)
                             scrubbing = false
                             scheduleHide()
                         }
-                    })
-                    .tint(.orange)
+                    }
 
                     HStack {
                         Text(timeString(scrubbing ? scrubValue : playback.currentTime))
+                        Spacer()
+                        if playback.bufferedAhead > 1 {
+                            Label("\(timeString(playback.bufferedAhead)) loaded", systemImage: "arrow.down.circle")
+                                .labelStyle(.titleAndIcon)
+                        }
                         Spacer()
                         Text("−" + timeString(playback.duration - (scrubbing ? scrubValue : playback.currentTime)))
                     }
@@ -196,38 +215,74 @@ private struct ErrorPanel: View {
     }
 }
 
-/// The video itself, drawn with an AVPlayerLayer.
-struct VideoLayerView: UIViewRepresentable {
-    let player: AVPlayer
-
-    final class LayerView: UIView {
-        override class var layerClass: AnyClass { AVPlayerLayer.self }
-        var playerLayer: AVPlayerLayer { layer as! AVPlayerLayer }
+/// Hosts the shared video view that VLC draws into.
+struct VideoHost: UIViewRepresentable {
+    func makeUIView(context: Context) -> UIView {
+        let container = UIView()
+        container.backgroundColor = .black
+        attach(to: container)
+        return container
     }
 
-    func makeUIView(context: Context) -> LayerView {
-        let v = LayerView()
-        v.backgroundColor = .black
-        v.playerLayer.videoGravity = .resizeAspect
-        v.playerLayer.player = player
-        return v
+    func updateUIView(_ container: UIView, context: Context) {
+        attach(to: container)
     }
 
-    func updateUIView(_ v: LayerView, context: Context) {
-        if v.playerLayer.player !== player { v.playerLayer.player = player }
+    private func attach(to container: UIView) {
+        let video = PlaybackManager.shared.videoView
+        guard video.superview !== container else { return }
+        video.removeFromSuperview()
+        video.frame = container.bounds
+        video.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        container.addSubview(video)
     }
 }
 
-/// AirPlay button.
-struct RoutePicker: UIViewRepresentable {
-    func makeUIView(context: Context) -> AVRoutePickerView {
-        let v = AVRoutePickerView()
-        v.prioritizesVideoDevices = true
-        v.tintColor = .white
-        v.activeTintColor = .systemOrange
-        return v
+/// Audio language and subtitle picker (the "…" button).
+private struct TracksMenu: View {
+    @EnvironmentObject var playback: PlaybackManager
+    let onOpen: () -> Void
+
+    var body: some View {
+        Menu {
+            let audio = playback.audioTracks
+            if !audio.isEmpty {
+                Section("Audio") {
+                    ForEach(audio) { t in
+                        Button {
+                            playback.selectAudioTrack(t.id)
+                        } label: {
+                            if t.id == playback.currentAudioTrack { Label(t.name, systemImage: "checkmark") }
+                            else { Text(t.name) }
+                        }
+                    }
+                }
+            }
+            let subs = playback.subtitleTracks
+            if !subs.isEmpty {
+                Section("Subtitles") {
+                    ForEach(subs) { t in
+                        Button {
+                            playback.selectSubtitleTrack(t.id)
+                        } label: {
+                            if t.id == playback.currentSubtitleTrack { Label(t.name, systemImage: "checkmark") }
+                            else { Text(t.name) }
+                        }
+                    }
+                }
+            }
+            if audio.isEmpty && subs.isEmpty {
+                Text("No other audio or subtitles")
+            }
+        } label: {
+            Image(systemName: "ellipsis")
+                .font(.system(size: 18, weight: .bold))
+                .frame(width: 40, height: 40)
+                .background(.ultraThinMaterial, in: Circle())
+        }
+        .foregroundStyle(.white)
+        .simultaneousGesture(TapGesture().onEnded { onOpen() })
     }
-    func updateUIView(_ uiView: AVRoutePickerView, context: Context) {}
 }
 
 // MARK: - Car screen remote

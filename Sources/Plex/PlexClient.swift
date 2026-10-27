@@ -280,47 +280,15 @@ final class PlexClient {
         return comps?.url
     }
 
-    /// Builds the playback URL. "Original" plays the file directly when iOS can handle it,
-    /// otherwise the server remuxes/transcodes to HLS.
-    func streamURL(for item: PlexItem, quality: StreamQuality, session: String) -> URL? {
-        guard let server else { return nil }
-
-        let directContainers = ["mp4", "m4v", "mov"]
-        if quality == .original,
-           let container = item.container?.lowercased(), directContainers.contains(container),
-           let partKey = item.firstPart?.key {
-            var comps = URLComponents(string: server.baseURL + partKey)
-            comps?.queryItems = [URLQueryItem(name: "X-Plex-Token", value: server.accessToken)]
-            return comps?.url
-        }
-
-        var comps = URLComponents(string: server.baseURL + "/video/:/transcode/universal/start.m3u8")
-        var q: [URLQueryItem] = [
-            URLQueryItem(name: "path", value: "/library/metadata/\(item.ratingKey.value)"),
-            URLQueryItem(name: "mediaIndex", value: "0"),
-            URLQueryItem(name: "partIndex", value: "0"),
-            URLQueryItem(name: "protocol", value: "hls"),
-            URLQueryItem(name: "fastSeek", value: "1"),
-            URLQueryItem(name: "directPlay", value: "0"),
-            URLQueryItem(name: "directStream", value: "1"),
-            URLQueryItem(name: "directStreamAudio", value: "1"),
-            URLQueryItem(name: "subtitles", value: "burn"),
-            URLQueryItem(name: "audioBoost", value: "100"),
-            URLQueryItem(name: "location", value: "wan"),
-            URLQueryItem(name: "session", value: session),
-            URLQueryItem(name: "X-Plex-Session-Identifier", value: session),
+    /// Direct-play address of the original file (no server-side conversion at all).
+    func directURL(for item: PlexItem) -> URL? {
+        guard let server, let partKey = item.firstPart?.key else { return nil }
+        var comps = URLComponents(string: server.baseURL + partKey)
+        comps?.queryItems = [
             URLQueryItem(name: "X-Plex-Token", value: server.accessToken),
+            URLQueryItem(name: "X-Plex-Client-Identifier", value: clientIdentifier),
+            URLQueryItem(name: "X-Plex-Product", value: Self.product),
         ]
-        for (k, v) in plexHeaders() where k != "Accept" {
-            q.append(URLQueryItem(name: k, value: v))
-        }
-        if let kbps = quality.maxBitrateKbps {
-            q.append(URLQueryItem(name: "maxVideoBitrate", value: String(kbps)))
-            q.append(URLQueryItem(name: "videoQuality", value: "90"))
-        } else {
-            q.append(URLQueryItem(name: "videoQuality", value: "100"))
-        }
-        comps?.queryItems = q
         return comps?.url
     }
 }

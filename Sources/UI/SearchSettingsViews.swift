@@ -20,7 +20,7 @@ struct SearchView: View {
             }
         }
         .overlay {
-            if searching { ProgressView() }
+            if searching { OrangeSpinner() }
             else if !query.isEmpty && results.isEmpty { Text("No results").foregroundStyle(.secondary) }
         }
         .navigationTitle("Search")
@@ -85,15 +85,15 @@ struct SettingsView: View {
             }
 
             Section {
-                Picker("Quality", selection: $app.quality) {
-                    ForEach(StreamQuality.allCases) { Text($0.label).tag($0) }
+                Picker("Load ahead", selection: $app.bufferMinutes) {
+                    ForEach(AppState.bufferChoices, id: \.self) { m in
+                        Text("\(m) min").tag(m)
+                    }
                 }
-                .pickerStyle(.inline)
-                .labelsHidden()
             } header: {
-                Text("Streaming quality")
+                Text("Buffering")
             } footer: {
-                Text("Use a lower setting on cellular or Starlink to avoid buffering and save data.")
+                Text("How much video to download ahead so it keeps playing through dead spots. It's saved on the phone's storage (not memory) and deleted when you stop watching. Also keeps loading while paused, so you can pause before a known dead zone and let it fill up.")
             }
 
             Section {

@@ -76,6 +76,7 @@ struct PlexPart: Decodable, Hashable {
     let key: String?
     let container: String?
     let duration: Int?
+    let size: Int64?
 }
 
 struct PlexMedia: Decodable, Hashable {

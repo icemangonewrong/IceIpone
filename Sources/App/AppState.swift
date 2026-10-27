@@ -2,32 +2,6 @@ import Foundation
 import Security
 import UIKit
 
-enum StreamQuality: String, CaseIterable, Identifiable, Codable {
-    case original, high, medium, low, cellular
-
-    var id: String { rawValue }
-
-    var label: String {
-        switch self {
-        case .original: return "Original (direct play when possible)"
-        case .high: return "High · 20 Mbps"
-        case .medium: return "Medium · 8 Mbps"
-        case .low: return "Low · 4 Mbps"
-        case .cellular: return "Data saver · 2 Mbps"
-        }
-    }
-
-    var maxBitrateKbps: Int? {
-        switch self {
-        case .original: return nil
-        case .high: return 20000
-        case .medium: return 8000
-        case .low: return 4000
-        case .cellular: return 2000
-        }
-    }
-}
-
 /// App-wide state shared by the phone UI and the CarPlay screen.
 @MainActor
 final class AppState: ObservableObject {
@@ -47,19 +21,21 @@ final class AppState: ObservableObject {
     @Published var excludedSections: Set<String> {
         didSet { UserDefaults.standard.set(Array(excludedSections), forKey: Keys.excluded) }
     }
-    @Published var quality: StreamQuality {
-        didSet { UserDefaults.standard.set(quality.rawValue, forKey: Keys.quality) }
-    }
     @Published var pauseWhenMoving: Bool {
         didSet { UserDefaults.standard.set(pauseWhenMoving, forKey: Keys.pauseWhenMoving) }
     }
+    /// How many minutes of video to keep downloaded ahead (stored on the phone, not in memory).
+    @Published var bufferMinutes: Int {
+        didSet { UserDefaults.standard.set(bufferMinutes, forKey: Keys.bufferMinutes) }
+    }
+    static let bufferChoices = [2, 5, 10, 20, 30]
 
     private enum Keys {
         static let clientID = "clientIdentifier"
         static let server = "savedServer"
         static let excluded = "excludedSections"
-        static let quality = "streamQuality"
         static let pauseWhenMoving = "pauseWhenMoving"
+        static let bufferMinutes = "bufferMinutes"
         static let tokenAccount = "plexToken"
     }
 
@@ -75,8 +51,9 @@ final class AppState: ObservableObject {
         client = PlexClient(clientIdentifier: clientID)
 
         excludedSections = Set(defaults.stringArray(forKey: Keys.excluded) ?? [])
-        quality = StreamQuality(rawValue: defaults.string(forKey: Keys.quality) ?? "") ?? .original
         pauseWhenMoving = defaults.object(forKey: Keys.pauseWhenMoving) as? Bool ?? true
+        let savedBuffer = defaults.object(forKey: Keys.bufferMinutes) as? Int ?? 10
+        bufferMinutes = AppState.bufferChoices.contains(savedBuffer) ? savedBuffer : 10
 
         token = Keychain.read(Keys.tokenAccount)
         if let data = defaults.data(forKey: Keys.server),

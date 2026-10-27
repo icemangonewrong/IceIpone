@@ -196,7 +196,6 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
 // MARK: - The video on the car screen
 
 final class CarVideoViewController: UIViewController {
-    private let playerLayer = AVPlayerLayer()
     private let idleLabel = UILabel()
     private let statusLabel = UILabel()
     private var cancellables = Set<AnyCancellable>()
@@ -205,8 +204,12 @@ final class CarVideoViewController: UIViewController {
         super.viewDidLoad()
         view.backgroundColor = .black
 
-        playerLayer.videoGravity = .resizeAspect
-        view.layer.addSublayer(playerLayer)
+        // Take over the shared video view from the phone.
+        let video = PlaybackManager.shared.videoView
+        video.removeFromSuperview()
+        video.frame = view.bounds
+        video.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        view.addSubview(video)
 
         idleLabel.text = "CarPlex\nTap Browse to pick something"
         idleLabel.numberOfLines = 0
@@ -231,25 +234,18 @@ final class CarVideoViewController: UIViewController {
         statusLabel.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -16).isActive = true
 
         let pb = PlaybackManager.shared
-        pb.$player
+        pb.$isActive
             .receive(on: RunLoop.main)
-            .sink { [weak self] player in
-                self?.playerLayer.player = player
-                self?.idleLabel.isHidden = player != nil
-            }
+            .sink { [weak self] active in self?.idleLabel.isHidden = active }
             .store(in: &cancellables)
 
-        pb.$heldForMotion.combineLatest(pb.$errorMessage)
+        pb.$heldForMotion.combineLatest(pb.$waitingForSignal, pb.$errorMessage)
             .receive(on: RunLoop.main)
-            .sink { [weak self] held, error in
+            .sink { [weak self] held, waiting, error in
                 if held { self?.statusLabel.text = "Paused while moving" }
+                else if waiting { self?.statusLabel.text = "No signal — will continue when it's back" }
                 else { self?.statusLabel.text = error }
             }
             .store(in: &cancellables)
-    }
-
-    override func viewDidLayoutSubviews() {
-        super.viewDidLayoutSubviews()
-        playerLayer.frame = view.bounds
     }
 }

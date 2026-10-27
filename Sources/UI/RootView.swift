@@ -63,7 +63,7 @@ struct SignInView: View {
                 Task { await app.signIn() }
             } label: {
                 if app.signInInProgress {
-                    HStack { ProgressView(); Text("Waiting for Plex…") }
+                    HStack { OrangeSpinner(size: 18); Text("Waiting for Plex…") }
                         .frame(maxWidth: .infinity)
                 } else {
                     Text("Sign in with Plex").frame(maxWidth: .infinity)
@@ -94,7 +94,7 @@ struct ServerPickerView: View {
     var body: some View {
         List {
             if loading {
-                HStack { ProgressView(); Text("Finding your servers…") }
+                HStack { OrangeSpinner(size: 18); Text("Finding your servers…") }
             }
             ForEach(servers) { server in
                 Button {
@@ -108,7 +108,7 @@ struct ServerPickerView: View {
                                 .font(.caption).foregroundStyle(.secondary)
                         }
                         Spacer()
-                        if connectingID == server.id { ProgressView() }
+                        if connectingID == server.id { OrangeSpinner(size: 18) }
                     }
                 }
                 .disabled(connectingID != nil)

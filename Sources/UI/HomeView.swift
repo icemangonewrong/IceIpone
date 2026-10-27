@@ -28,7 +28,7 @@ struct HomeView: View {
             .padding(.vertical)
         }
         .overlay {
-            if app.isLoading && app.continueWatching.isEmpty { ProgressView() }
+            if app.isLoading && app.continueWatching.isEmpty { OrangeSpinner() }
         }
         .navigationTitle(app.server?.name ?? "Home")
         .navigationDestination(for: PlexItem.self) { ItemDetailView(item: $0) }
