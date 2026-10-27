@@ -1,0 +1,53 @@
+name: Build CarPlex
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install tools
+        run: |
+          brew install xcodegen
+          brew install ldid || {
+            curl -fsSL -o ldid https://github.com/ProcursusTeam/ldid/releases/download/v2.1.5-procursus7/ldid_macosx_arm64
+            chmod +x ldid
+            sudo mv ldid /usr/local/bin/ldid
+          }
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Build app (no signing)
+        run: |
+          xcodebuild -project CarPlex.xcodeproj \
+            -target CarPlex \
+            -configuration Release \
+            -sdk iphoneos \
+            SYMROOT="$PWD/build" \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            build
+
+      - name: Package Feather IPA (sign with your Arctic cert)
+        run: |
+          rm -rf Payload && mkdir Payload
+          cp -R build/Release-iphoneos/CarPlex.app Payload/
+          zip -qr CarPlex.ipa Payload
+
+      - name: Package CarPlay IPA (for TrollStore / jailbreak)
+        run: |
+          rm -rf Payload && mkdir Payload
+          cp -R build/Release-iphoneos/CarPlex.app Payload/
+          ldid -SCarPlex-CarPlay.entitlements Payload/CarPlex.app/CarPlex
+          zip -qr CarPlex-CarPlay.ipa Payload
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: CarPlex-ipas
+          path: |
+            CarPlex.ipa
+            CarPlex-CarPlay.ipa
