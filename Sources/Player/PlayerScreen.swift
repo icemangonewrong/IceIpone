@@ -68,7 +68,7 @@ private struct PlayerView: View {
         }
         .foregroundStyle(.white)
         .onAppear { scheduleHide() }
-        .onChange(of: playback.isPlaying) { _ in scheduleHide() }
+        .onChange(of: playback.isPlaying) { scheduleHide() }
     }
 
     private var controls: some View {

@@ -109,7 +109,7 @@ struct SettingsView: View {
             }
         }
         .navigationTitle("Settings")
-        .onChange(of: app.excludedSections) { _ in
+        .onChange(of: app.excludedSections) {
             Task { await app.refreshHome() }
         }
     }

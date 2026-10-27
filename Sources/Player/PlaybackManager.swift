@@ -103,7 +103,8 @@ final class PlaybackManager: NSObject, ObservableObject {
             currentTime = pendingResumeSeconds
             newPlayer.seek(to: CMTime(seconds: pendingResumeSeconds, preferredTimescale: 600),
                            toleranceBefore: CMTime(seconds: 5, preferredTimescale: 1),
-                           toleranceAfter: .zero)
+                           toleranceAfter: .zero,
+                           completionHandler: { _ in })
             pendingResumeSeconds = 0
         }
 
