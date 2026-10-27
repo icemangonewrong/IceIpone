@@ -12,6 +12,7 @@ final class PlaybackManager: NSObject, ObservableObject {
     @Published private(set) var player: AVPlayer?
     @Published private(set) var current: PlexItem?
     @Published private(set) var isPlaying = false
+    @Published private(set) var isBuffering = false
     @Published private(set) var currentTime: Double = 0
     @Published private(set) var duration: Double = 0
     @Published private(set) var errorMessage: String?
@@ -56,8 +57,8 @@ final class PlaybackManager: NSObject, ObservableObject {
             }
             target = next
         }
-        // Fresh metadata has the latest resume point and file info.
-        if let fresh = try? await client.metadata(target.ratingKey.value) { target = fresh }
+        // Only fetch details if the list didn't include file info (saves a round trip).
+        if target.Media == nil, let fresh = try? await client.metadata(target.ratingKey.value) { target = fresh }
 
         await stop(reportOnly: true)
 
@@ -70,6 +71,7 @@ final class PlaybackManager: NSObject, ObservableObject {
         let avItem = AVPlayerItem(url: url)
         let newPlayer = AVPlayer(playerItem: avItem)
         newPlayer.allowsExternalPlayback = true
+        avItem.preferredForwardBufferDuration = 0  // let AVPlayer start as soon as it can
 
         current = target
         duration = Double(target.duration ?? 0) / 1000
@@ -84,6 +86,7 @@ final class PlaybackManager: NSObject, ObservableObject {
         rateObservation = newPlayer.observe(\.timeControlStatus, options: [.new]) { [weak self] p, _ in
             Task { @MainActor in
                 self?.isPlaying = p.timeControlStatus != .paused
+                self?.isBuffering = p.timeControlStatus == .waitingToPlayAtSpecifiedRate
                 self?.updateNowPlaying()
             }
         }
@@ -96,7 +99,16 @@ final class PlaybackManager: NSObject, ObservableObject {
             Task { @MainActor in await self?.finished() }
         }
 
+        if pendingResumeSeconds > 1 {
+            currentTime = pendingResumeSeconds
+            newPlayer.seek(to: CMTime(seconds: pendingResumeSeconds, preferredTimescale: 600),
+                           toleranceBefore: CMTime(seconds: 5, preferredTimescale: 1),
+                           toleranceAfter: .zero)
+            pendingResumeSeconds = 0
+        }
+
         player = newPlayer
+        isBuffering = true
         if !heldForMotion { newPlayer.play() }
         startReporting()
         updateNowPlaying()
@@ -122,11 +134,19 @@ final class PlaybackManager: NSObject, ObservableObject {
         isPlaying = false
         MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
 
+        isBuffering = false
         let durMs = Int(duration * 1000)
-        await client.reportTimeline(item: item, state: "stopped", timeMs: Int(t * 1000), durationMs: durMs)
-        if duration > 0, t / duration > 0.9 { await client.markWatched(item.ratingKey.value) }
-        await client.stopTranscode(session: session)
-        if !reportOnly { await state.refreshContinueWatching() }
+        let watched = duration > 0 && t / duration > 0.9
+        let oldSession = session
+        let c = client
+        let refresh = !reportOnly
+        // Report in the background so the next video doesn't wait on these calls.
+        Task {
+            await c.reportTimeline(item: item, state: "stopped", timeMs: Int(t * 1000), durationMs: durMs)
+            if watched { await c.markWatched(item.ratingKey.value) }
+            await c.stopTranscode(session: oldSession)
+            if refresh { await AppState.shared.refreshContinueWatching() }
+        }
     }
 
     // MARK: - Controls
@@ -233,14 +253,14 @@ final class PlaybackManager: NSObject, ObservableObject {
             Task { @MainActor in self?.togglePlayPause() }
             return .success
         }
-        c.skipForwardCommand.preferredIntervals = [30]
+        c.skipForwardCommand.preferredIntervals = [10]
         c.skipForwardCommand.addTarget { [weak self] _ in
-            Task { @MainActor in self?.skip(30) }
+            Task { @MainActor in self?.skip(10) }
             return .success
         }
-        c.skipBackwardCommand.preferredIntervals = [15]
+        c.skipBackwardCommand.preferredIntervals = [10]
         c.skipBackwardCommand.addTarget { [weak self] _ in
-            Task { @MainActor in self?.skip(-15) }
+            Task { @MainActor in self?.skip(-10) }
             return .success
         }
         c.changePlaybackPositionCommand.addTarget { [weak self] event in

@@ -41,12 +41,12 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
             },
         ]
 
-        let back = CPMapButton { [weak self] _ in self?.playback.skip(-15) }
-        back.image = UIImage(systemName: "gobackward.15")
+        let back = CPMapButton { [weak self] _ in self?.playback.skip(-10) }
+        back.image = UIImage(systemName: "gobackward.10")
         let playPause = CPMapButton { [weak self] _ in self?.playback.togglePlayPause() }
         playPause.image = UIImage(systemName: "playpause.fill")
-        let forward = CPMapButton { [weak self] _ in self?.playback.skip(30) }
-        forward.image = UIImage(systemName: "goforward.30")
+        let forward = CPMapButton { [weak self] _ in self?.playback.skip(10) }
+        forward.image = UIImage(systemName: "goforward.10")
         map.mapButtons = [back, playPause, forward]
         playPauseButton = playPause
 

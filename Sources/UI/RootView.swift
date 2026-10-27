@@ -14,6 +14,8 @@ struct RootView: View {
                 MainTabs()
             }
         }
+        .preferredColorScheme(.dark)
+        .tint(.orange)
         .fullScreenCover(isPresented: Binding(
             get: { playback.showPlayerUI },
             set: { shown in if !shown { Task { await playback.stop() } } }
@@ -48,9 +50,10 @@ struct SignInView: View {
     var body: some View {
         VStack(spacing: 24) {
             Spacer()
-            Image(systemName: "play.tv.fill")
-                .font(.system(size: 72))
-                .foregroundStyle(.orange)
+            Image("Logo")
+                .resizable()
+                .frame(width: 140, height: 140)
+                .clipShape(RoundedRectangle(cornerRadius: 32, style: .continuous))
             Text("CarPlex").font(.largeTitle.bold())
             Text("Sign in with your Plex account. Safari will open; approve the sign-in, then come back here.")
                 .multilineTextAlignment(.center)
