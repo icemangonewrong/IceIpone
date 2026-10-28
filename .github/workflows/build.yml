@@ -22,28 +22,43 @@ jobs:
       - name: Generate Xcode project
         run: xcodegen generate
 
+      # The VLC package is large (~780 MB); keep it between builds so it only downloads once.
+      - name: Cache packages
+        uses: actions/cache@v4
+        with:
+          path: build/SourcePackages
+          key: spm-${{ hashFiles('project.yml') }}
+
       - name: Build app (no signing)
         run: |
+          set -o pipefail
           xcodebuild -project CarPlex.xcodeproj \
-            -target CarPlex \
+            -scheme CarPlex \
             -configuration Release \
             -sdk iphoneos \
-            SYMROOT="$PWD/build" \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build \
+            -clonedSourcePackagesDirPath build/SourcePackages \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
-            build
+            build 2>&1 | tee build.log | grep -E "error:|warning: unre|BUILD (SUCCEEDED|FAILED)" || true
+          test -d build/Build/Products/Release-iphoneos/CarPlex.app
+
+      - name: Show errors
+        if: failure()
+        run: grep -E " error: " build.log | sort -u | head -40 || true
 
       - name: Package Feather IPA (sign with your Arctic cert)
         run: |
           rm -rf Payload && mkdir Payload
-          cp -R build/Release-iphoneos/CarPlex.app Payload/
-          zip -qr CarPlex.ipa Payload
+          cp -R build/Build/Products/Release-iphoneos/CarPlex.app Payload/
+          zip -qry CarPlex.ipa Payload
 
       - name: Package CarPlay IPA (for TrollStore / jailbreak)
         run: |
           rm -rf Payload && mkdir Payload
-          cp -R build/Release-iphoneos/CarPlex.app Payload/
+          cp -R build/Build/Products/Release-iphoneos/CarPlex.app Payload/
           ldid -SCarPlex-CarPlay.entitlements Payload/CarPlex.app/CarPlex
-          zip -qr CarPlex-CarPlay.ipa Payload
+          zip -qry CarPlex-CarPlay.ipa Payload
 
       - uses: actions/upload-artifact@v4
         with:
