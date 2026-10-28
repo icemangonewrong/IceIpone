@@ -45,7 +45,8 @@ jobs:
 
       - name: Show errors
         if: failure()
-        run: grep -E " error: " build.log | sort -u | head -40 || true
+        run: |
+          grep -E " error: " build.log | sort -u | head -40 || true
 
       - name: Package Feather IPA (sign with your Arctic cert)
         run: |
