@@ -27,7 +27,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: build/SourcePackages
-          key: spm-${{ hashFiles('project.yml') }}
+        key: spm-vlckit-3.6.0
 
       - name: Build app (no signing)
         run: |
