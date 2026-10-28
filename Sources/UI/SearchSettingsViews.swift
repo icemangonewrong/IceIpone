@@ -2,22 +2,13 @@ import SwiftUI
 
 struct SearchView: View {
     @EnvironmentObject var app: AppState
-    @EnvironmentObject var playback: PlaybackManager
     @State private var query = ""
     @State private var results: [PlexItem] = []
     @State private var searching = false
 
     var body: some View {
         List(results) { item in
-            if item.isPlayable {
-                Button {
-                    Task { await playback.play(item) }
-                } label: { SearchRow(item: item) }
-                .buttonStyle(.plain)
-                .contextMenu { ItemMenu(item: item) }
-            } else {
-                NavigationLink(value: item) { SearchRow(item: item) }
-            }
+            NavigationLink(value: item) { SearchRow(item: item) }
         }
         .overlay {
             if searching { OrangeSpinner() }

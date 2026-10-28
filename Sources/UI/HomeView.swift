@@ -63,26 +63,14 @@ struct ItemRow: View {
     }
 }
 
-/// Poster tile. Tapping a movie or episode plays it (resuming); tapping a show/season opens it.
+/// Poster tile. Tapping always opens the info page.
 struct ItemTile: View {
-    @EnvironmentObject var app: AppState
-    @EnvironmentObject var playback: PlaybackManager
     let item: PlexItem
     let width: CGFloat
 
     var body: some View {
-        Group {
-            if item.isPlayable {
-                Button {
-                    Task { await playback.play(item) }
-                } label: { tileBody }
-                .buttonStyle(.plain)
-            } else {
-                NavigationLink(value: item) { tileBody }
-                    .buttonStyle(.plain)
-            }
-        }
-        .contextMenu { ItemMenu(item: item) }
+        NavigationLink(value: item) { tileBody }
+            .buttonStyle(.plain)
     }
 
     private var tileBody: some View {
@@ -100,7 +88,8 @@ struct ItemTile: View {
                     }
                 }
                 .overlay(alignment: .topTrailing) {
-                    if item.isWatched {
+                    // Only for finished items; a rewatch in progress shows just the progress bar.
+                    if item.isWatched && item.progress == nil {
                         Image(systemName: "checkmark.circle.fill")
                             .foregroundStyle(.white, .orange)
                             .padding(4)
@@ -114,38 +103,6 @@ struct ItemTile: View {
             }
         }
         .frame(width: width)
-    }
-}
-
-/// Long-press menu shared by tiles and lists.
-struct ItemMenu: View {
-    @EnvironmentObject var app: AppState
-    @EnvironmentObject var playback: PlaybackManager
-    let item: PlexItem
-
-    var body: some View {
-        if item.isPlayable || item.type == "show" {
-            Button { Task { await playback.play(item) } } label: {
-                Label((item.viewOffset ?? 0) > 0 ? "Resume" : "Play", systemImage: "play.fill")
-            }
-        }
-        if item.isPlayable {
-            Button { Task { await playback.play(item, fromStart: true) } } label: {
-                Label("Play from start", systemImage: "backward.end.fill")
-            }
-        }
-        Button {
-            Task {
-                await app.client.markWatched(item.ratingKey.value)
-                await app.refreshContinueWatching()
-            }
-        } label: { Label("Mark watched", systemImage: "checkmark.circle") }
-        Button {
-            Task {
-                await app.client.markUnwatched(item.ratingKey.value)
-                await app.refreshContinueWatching()
-            }
-        } label: { Label("Mark unwatched", systemImage: "circle") }
     }
 }
 

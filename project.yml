@@ -20,8 +20,8 @@ targets:
       path: Info.plist
       properties:
         CFBundleDisplayName: CarPlex
-        CFBundleShortVersionString: "2.0"
-        CFBundleVersion: "4"
+        CFBundleShortVersionString: "2.1"
+        CFBundleVersion: "5"
         ITSAppUsesNonExemptEncryption: false
         UILaunchScreen: {}
         UIUserInterfaceStyle: Dark

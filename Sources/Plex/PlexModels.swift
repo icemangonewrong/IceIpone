@@ -83,8 +83,23 @@ struct PlexMedia: Decodable, Hashable {
     let container: String?
     let videoCodec: String?
     let audioCodec: String?
+    let audioChannels: Int?
     let videoResolution: String?
+    let videoDynamicRange: String?
+    let bitrate: Int?
+    let width: Int?
+    let height: Int?
     let Part: [PlexPart]?
+}
+
+/// Genre, director, etc. Plex sends these as [{"tag": "Drama"}, ...].
+struct PlexTag: Decodable, Hashable {
+    let tag: String
+}
+
+struct PlexRole: Decodable, Hashable {
+    let tag: String
+    let role: String?
 }
 
 struct PlexItem: Decodable, Identifiable, Hashable {
@@ -111,7 +126,17 @@ struct PlexItem: Decodable, Identifiable, Hashable {
     let viewedLeafCount: Int?
     let librarySectionID: FlexString?
     let addedAt: Int?
+    let contentRating: String?
+    let audienceRating: Double?
+    let rating: Double?
+    let tagline: String?
+    let studio: String?
+    let grandparentArt: String?
+    let childCount: Int?
     let Media: [PlexMedia]?
+    let Genre: [PlexTag]?
+    let Director: [PlexTag]?
+    let Role: [PlexRole]?
 
     var id: String { ratingKey.value }
 
