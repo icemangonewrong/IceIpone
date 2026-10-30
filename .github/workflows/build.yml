@@ -1,4 +1,4 @@
-name: Build IcePlex (iPhone)
+name: Build Ice (iPhone)
 
 on:
   push:
@@ -35,8 +35,8 @@ jobs:
       - name: Build app (no signing)
         run: |
           set -o pipefail
-          xcodebuild -project IcePlex.xcodeproj \
-            -scheme IcePlex \
+          xcodebuild -project Ice.xcodeproj \
+            -scheme Ice \
             -configuration Release \
             -sdk iphoneos \
             -destination 'generic/platform=iOS' \
@@ -44,7 +44,7 @@ jobs:
             -clonedSourcePackagesDirPath build/SourcePackages \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
             build 2>&1 | tee build.log | grep -E "error:|warning: unre|BUILD (SUCCEEDED|FAILED)" || true
-          test -d build/Build/Products/Release-iphoneos/IcePlex.app
+          test -d build/Build/Products/Release-iphoneos/Ice.app
 
       # Turn compiler errors into GitHub annotations so they're readable without the full log.
       - name: Show errors
@@ -62,22 +62,22 @@ jobs:
       - name: Package Feather IPA (sign with your Arctic cert)
         run: |
           rm -rf Payload && mkdir Payload
-          cp -R build/Build/Products/Release-iphoneos/IcePlex.app Payload/
-          zip -qry IcePlex.ipa Payload
+          cp -R build/Build/Products/Release-iphoneos/Ice.app Payload/
+          zip -qry Ice.ipa Payload
 
       - name: Package CarPlay IPA (for TrollStore / jailbreak)
         run: |
           rm -rf Payload && mkdir Payload
-          cp -R build/Build/Products/Release-iphoneos/IcePlex.app Payload/
-          ldid -SIcePlex-CarPlay.entitlements Payload/IcePlex.app/IcePlex
-          zip -qry IcePlex-CarPlay.ipa Payload
+          cp -R build/Build/Products/Release-iphoneos/Ice.app Payload/
+          ldid -SIce-CarPlay.entitlements Payload/Ice.app/Ice
+          zip -qry Ice-CarPlay.ipa Payload
 
       - uses: actions/upload-artifact@v4
         with:
-          name: IcePlex-ipas
+          name: Ice-ipas
           path: |
-            IcePlex.ipa
-            IcePlex-CarPlay.ipa
+            Ice.ipa
+            Ice-CarPlay.ipa
 
       # Publish each build from main as a GitHub Release (easy to download on a phone).
       - name: Publish release
@@ -87,4 +87,4 @@ jobs:
         run: |
           tag="build-${{ github.run_number }}"
           git log -1 --pretty=%B > notes.txt
-          gh release create "$tag" IcePlex.ipa IcePlex-CarPlay.ipa --title "IcePlex for iPhone (build ${{ github.run_number }})" --notes-file notes.txt --latest
+          gh release create "$tag" Ice.ipa Ice-CarPlay.ipa --title "Ice for iPhone (build ${{ github.run_number }})" --notes-file notes.txt --latest

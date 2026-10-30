@@ -87,7 +87,7 @@ struct PlayableDetailView: View {
             }
             VStack(alignment: .leading, spacing: 6) {
                 if isEpisode {
-                    Text(d.grandparentTitle ?? "").font(.subheadline.weight(.semibold)).foregroundStyle(.orange)
+                    Text(d.grandparentTitle ?? "").font(.subheadline.weight(.semibold)).foregroundStyle(Color.ice)
                 }
                 Text(d.title ?? "").font(.title.bold()).fixedSize(horizontal: false, vertical: true)
                 if isEpisode, let s = d.parentIndex, let e = d.index {
@@ -177,7 +177,7 @@ struct ShowDetailView: View {
                                                     .overlay(alignment: .topTrailing) {
                                                         if season.isWatched {
                                                             Image(systemName: "checkmark.circle.fill")
-                                                                .foregroundStyle(.white, .orange).padding(4)
+                                                                .foregroundStyle(.white, Color.ice).padding(4)
                                                         }
                                                     }
                                                 Text(season.title ?? "Season").font(.caption.bold()).lineLimit(1)
@@ -236,7 +236,7 @@ struct SeasonDetailView: View {
                 HStack(alignment: .bottom, spacing: 14) {
                     PosterImage(path: d.thumb, width: 90)
                     VStack(alignment: .leading, spacing: 4) {
-                        Text(d.parentTitle ?? "").font(.subheadline.weight(.semibold)).foregroundStyle(.orange)
+                        Text(d.parentTitle ?? "").font(.subheadline.weight(.semibold)).foregroundStyle(Color.ice)
                         Text(d.title ?? "Season").font(.title2.bold())
                         Text("\(episodes.count) episodes").foregroundStyle(.secondary)
                     }
@@ -329,7 +329,7 @@ private struct PlayButtons: View {
         VStack(alignment: .leading, spacing: 10) {
             if inProgress, let p = item.progress {
                 HStack(spacing: 10) {
-                    ProgressView(value: p).tint(.orange)
+                    ProgressView(value: p).tint(Color.ice)
                     if let dur = item.duration, let off = item.viewOffset {
                         Text("\(runtimeString(max(dur - off, 0))) left")
                             .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
@@ -390,7 +390,7 @@ private struct WatchedButton: View {
             .font(.subheadline.weight(.semibold))
         }
         .buttonStyle(.bordered)
-        .tint(watched ? .orange : .gray)
+        .tint(watched ? Color.ice : .gray)
         .disabled(working)
     }
 }
@@ -491,15 +491,15 @@ private struct EpisodeCard: View {
             }
             .frame(width: 170, height: 96)
             .clipShape(RoundedRectangle(cornerRadius: 8))
-            .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.orange, lineWidth: isCurrent ? 2 : 0))
+            .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.ice, lineWidth: isCurrent ? 2 : 0))
             .overlay(alignment: .bottom) {
                 if let p = item.progress {
-                    ProgressView(value: p).tint(.orange).padding(.horizontal, 6).padding(.bottom, 4)
+                    ProgressView(value: p).tint(Color.ice).padding(.horizontal, 6).padding(.bottom, 4)
                 }
             }
             .overlay(alignment: .topTrailing) {
                 if item.isWatched && item.progress == nil {
-                    Image(systemName: "checkmark.circle.fill").foregroundStyle(.white, .orange).padding(4)
+                    Image(systemName: "checkmark.circle.fill").foregroundStyle(.white, Color.ice).padding(4)
                 }
             }
             Text("\(item.index.map { "\($0). " } ?? "")\(item.title ?? "")")
@@ -524,7 +524,7 @@ struct EpisodeRow: View {
             .clipShape(RoundedRectangle(cornerRadius: 6))
             .overlay(alignment: .bottom) {
                 if let p = item.progress {
-                    ProgressView(value: p).tint(.orange).padding(.horizontal, 4).padding(.bottom, 3)
+                    ProgressView(value: p).tint(Color.ice).padding(.horizontal, 4).padding(.bottom, 3)
                 }
             }
 
@@ -537,7 +537,7 @@ struct EpisodeRow: View {
             }
             Spacer()
             if item.isWatched && item.progress == nil {
-                Image(systemName: "checkmark.circle.fill").foregroundStyle(.orange)
+                Image(systemName: "checkmark.circle.fill").foregroundStyle(Color.ice)
             }
         }
         .contentShape(Rectangle())

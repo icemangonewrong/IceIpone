@@ -3,6 +3,8 @@ import SwiftUI
 struct RootView: View {
     @EnvironmentObject var app: AppState
     @EnvironmentObject var playback: PlaybackManager
+    @AppStorage(Accent.key) private var accentHex = Accent.defaultHex
+    @State private var tab = 0
 
     var body: some View {
         Group {
@@ -11,11 +13,13 @@ struct RootView: View {
             } else if app.server == nil {
                 NavigationStack { ServerPickerView() }
             } else {
-                MainTabs()
+                MainTabs(selection: $tab)
             }
         }
+        // Rebuild the screens when the accent color changes so everything picks it up.
+        .id(accentHex)
         .preferredColorScheme(.dark)
-        .tint(.orange)
+        .tint(Color(hex: accentHex))
         .fullScreenCover(isPresented: Binding(
             get: { playback.showPlayerUI },
             set: { shown in if !shown { Task { await playback.stop() } } }
@@ -28,16 +32,18 @@ struct RootView: View {
 }
 
 struct MainTabs: View {
+    @Binding var selection: Int
+
     var body: some View {
-        TabView {
+        TabView(selection: $selection) {
             NavigationStack { HomeView() }
-                .tabItem { Label("Home", systemImage: "house") }
+                .tabItem { Label("Home", systemImage: "house") }.tag(0)
             NavigationStack { LibrariesView() }
-                .tabItem { Label("Libraries", systemImage: "square.grid.2x2") }
+                .tabItem { Label("Libraries", systemImage: "square.grid.2x2") }.tag(1)
             NavigationStack { SearchView() }
-                .tabItem { Label("Search", systemImage: "magnifyingglass") }
+                .tabItem { Label("Search", systemImage: "magnifyingglass") }.tag(2)
             NavigationStack { SettingsView() }
-                .tabItem { Label("Settings", systemImage: "gear") }
+                .tabItem { Label("Settings", systemImage: "gear") }.tag(3)
         }
     }
 }
@@ -54,7 +60,7 @@ struct SignInView: View {
                 .resizable()
                 .frame(width: 140, height: 140)
                 .clipShape(RoundedRectangle(cornerRadius: 32, style: .continuous))
-            Text("IcePlex").font(.largeTitle.bold())
+            Text("Ice").font(.largeTitle.bold())
             Text("Sign in with your Plex account. Safari will open; approve the sign-in, then come back here.")
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
@@ -70,7 +76,7 @@ struct SignInView: View {
                 }
             }
             .buttonStyle(.borderedProminent)
-            .tint(.orange)
+            .tint(Color.ice)
             .controlSize(.large)
             .disabled(app.signInInProgress)
             .padding(.horizontal, 32)

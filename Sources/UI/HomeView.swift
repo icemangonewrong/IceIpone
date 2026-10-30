@@ -81,7 +81,7 @@ struct ItemTile: View {
                         GeometryReader { geo in
                             ZStack(alignment: .leading) {
                                 Rectangle().fill(.black.opacity(0.6))
-                                Rectangle().fill(.orange).frame(width: geo.size.width * p)
+                                Rectangle().fill(Color.ice).frame(width: geo.size.width * p)
                             }
                         }
                         .frame(height: 4)
@@ -91,7 +91,7 @@ struct ItemTile: View {
                     // Only for finished items; a rewatch in progress shows just the progress bar.
                     if item.isWatched && item.progress == nil {
                         Image(systemName: "checkmark.circle.fill")
-                            .foregroundStyle(.white, .orange)
+                            .foregroundStyle(.white, Color.ice)
                             .padding(4)
                     }
                 }

@@ -60,6 +60,14 @@ struct SettingsView: View {
             }
 
             Section {
+                AccentPicker()
+            } header: {
+                Text("Accent color")
+            } footer: {
+                Text("Used for buttons, progress bars, the loading circle and highlights.")
+            }
+
+            Section {
                 ForEach(app.sections) { section in
                     Toggle(section.title, isOn: Binding(
                         get: { !app.excludedSections.contains(section.key) },
@@ -107,7 +115,7 @@ struct SettingsView: View {
                         Text("\(ms > 0 ? "+" : "")\(ms) ms").foregroundStyle(.secondary)
                         Button("Reset") { app.audioDelays[device] = nil }
                             .buttonStyle(.borderless)
-                            .tint(.orange)
+                            .tint(Color.ice)
                     }
                 }
             } header: {

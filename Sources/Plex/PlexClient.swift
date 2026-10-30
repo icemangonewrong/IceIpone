@@ -18,7 +18,7 @@ enum PlexError: LocalizedError {
 
 /// Talks to plex.tv and to your Plex Media Server.
 final class PlexClient {
-    static let product = "IcePlex"
+    static let product = "Ice"
 
     let clientIdentifier: String
     var token: String?
@@ -47,7 +47,7 @@ final class PlexClient {
             "X-Plex-Version": "1.0",
             "X-Plex-Platform": "iOS",
             "X-Plex-Device": "iPhone",
-            "X-Plex-Device-Name": "IcePlex",
+            "X-Plex-Device-Name": "Ice",
         ]
         if let t = token { h["X-Plex-Token"] = t }
         return h

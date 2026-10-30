@@ -309,7 +309,7 @@ private struct UpNextCard: View {
         VStack(alignment: .leading, spacing: 4) {
             Text("UP NEXT · PLAYING IN \(seconds)")
                 .font(.caption.weight(.bold))
-                .foregroundStyle(.orange)
+                .foregroundStyle(Color.ice)
             Text(next.title ?? "Next episode").font(.headline).lineLimit(1)
             Text(episodeCode(next)).font(.caption).foregroundStyle(.white.opacity(0.65))
             HStack(spacing: 10) {
@@ -319,7 +319,7 @@ private struct UpNextCard: View {
                     Text("Play now").font(.subheadline.weight(.bold)).frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
-                .tint(.orange)
+                .tint(Color.ice)
                 .foregroundStyle(.black)
                 Button("Cancel") { playback.cancelUpNext() }
                     .buttonStyle(.bordered)
@@ -366,7 +366,7 @@ private struct AdjustSheet: View {
             .controlSize(.large)
             Button("Reset to 0") { set(0) }
                 .buttonStyle(.borderless)
-                .tint(.orange)
+                .tint(Color.ice)
         }
         .padding(24)
         .preferredColorScheme(.dark)
@@ -412,7 +412,7 @@ private struct ErrorPanel: View {
             Image(systemName: "exclamationmark.triangle").font(.largeTitle)
             Text(message).multilineTextAlignment(.center)
             Button("Close") { Task { await playback.stop() } }
-                .buttonStyle(.borderedProminent).tint(.orange)
+                .buttonStyle(.borderedProminent).tint(Color.ice)
         }
         .foregroundStyle(.white)
         .padding(24)
@@ -507,7 +507,7 @@ struct CarRemoteView: View {
 
     var body: some View {
         VStack(spacing: 24) {
-            Image(systemName: "car.fill").font(.system(size: 44)).foregroundStyle(.orange)
+            Image(systemName: "car.fill").font(.system(size: 44)).foregroundStyle(Color.ice)
             Text("Playing on car screen").font(.headline)
             if let item = playback.current {
                 Text(item.type == "episode" ? "\(item.displayTitle) · \(item.displaySubtitle ?? "")" : item.displayTitle)
@@ -523,7 +523,7 @@ struct CarRemoteView: View {
                 Slider(value: Binding(get: { playback.currentTime },
                                       set: { playback.seek(to: $0) }),
                        in: 0...playback.duration)
-                    .tint(.orange)
+                    .tint(Color.ice)
                 HStack {
                     Text(timeString(playback.currentTime))
                     Spacer()

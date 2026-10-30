@@ -1,4 +1,4 @@
-name: IcePlex
+name: Ice
 options:
   bundleIdPrefix: com.iceman
   deploymentTarget:
@@ -8,7 +8,7 @@ packages:
     url: https://github.com/tylerjonesio/vlckit-spm
     exactVersion: 3.6.0
 targets:
-  IcePlex:
+  Ice:
     type: application
     platform: iOS
     scheme: {}
@@ -19,9 +19,9 @@ targets:
     info:
       path: Info.plist
       properties:
-        CFBundleDisplayName: IcePlex
-        CFBundleShortVersionString: "3.0"
-        CFBundleVersion: "6"
+        CFBundleDisplayName: Ice
+        CFBundleShortVersionString: "3.1"
+        CFBundleVersion: "7"
         ITSAppUsesNonExemptEncryption: false
         UILaunchScreen: {}
         UIUserInterfaceStyle: Dark
@@ -34,8 +34,8 @@ targets:
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true
           NSAllowsLocalNetworking: true
-        NSLocalNetworkUsageDescription: IcePlex connects to your Plex server on the local network.
-        NSLocationWhenInUseUsageDescription: IcePlex pauses video on the car screen while the vehicle is moving.
+        NSLocalNetworkUsageDescription: Ice connects to your Plex server on the local network.
+        NSLocationWhenInUseUsageDescription: Ice pauses video on the car screen while the vehicle is moving.
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: true
           UISceneConfigurations:

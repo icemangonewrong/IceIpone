@@ -8,10 +8,10 @@ struct OrangeSpinner: View {
     var body: some View {
         ZStack {
             Circle()
-                .stroke(Color.orange.opacity(0.2), lineWidth: size * 0.12)
+                .stroke(Color.ice.opacity(0.2), lineWidth: size * 0.12)
             Circle()
                 .trim(from: 0, to: 0.28)
-                .stroke(Color.orange, style: StrokeStyle(lineWidth: size * 0.12, lineCap: .round))
+                .stroke(Color.ice, style: StrokeStyle(lineWidth: size * 0.12, lineCap: .round))
                 .rotationEffect(.degrees(spinning ? 360 : 0))
                 .animation(.linear(duration: 0.8).repeatForever(autoreverses: false), value: spinning)
         }
@@ -44,10 +44,10 @@ struct ScrubBar: View {
                 Capsule().fill(Color.white.opacity(0.2))
                 Capsule().fill(Color.white.opacity(0.45))
                     .frame(width: max(bufferX, playedX))
-                Capsule().fill(Color.orange)
+                Capsule().fill(Color.ice)
                     .frame(width: playedX)
                 Circle()
-                    .fill(Color.orange)
+                    .fill(Color.ice)
                     .frame(width: dragging ? 22 : 14, height: dragging ? 22 : 14)
                     .offset(x: playedX - (dragging ? 11 : 7))
                     .shadow(radius: 2)
