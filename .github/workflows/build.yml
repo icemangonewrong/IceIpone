@@ -51,6 +51,11 @@ jobs:
         if: failure()
         run: |
           grep -E " error: " build.log | sort -u | head -40 > errors.txt || true
+          # Anything else that looks like a failure (shown as plain annotations)
+          grep -E "error:|\*\* BUILD FAILED|Command .* failed|fatal" build.log | grep -v " error: " | sort -u | head -20 | while IFS= read -r line; do
+            echo "::error::$(echo "$line" | cut -c1-400)"
+          done
+          echo "--- last lines ---"; tail -40 build.log
           cat errors.txt
           while IFS= read -r line; do
             f=$(echo "$line" | sed -E 's#^.*/(Sources/[^:]+):([0-9]+):.*$#\1#')
