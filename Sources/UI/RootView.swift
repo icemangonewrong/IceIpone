@@ -22,7 +22,7 @@ struct RootView: View {
         .tint(Color(hex: accentHex))
         .fullScreenCover(isPresented: Binding(
             get: { playback.showPlayerUI },
-            set: { shown in if !shown { Task { await playback.stop() } } }
+            set: { shown in if !shown { playback.minimize() } }
         )) {
             PlayerScreen()
                 .environmentObject(app)
@@ -33,16 +33,33 @@ struct RootView: View {
 
 struct MainTabs: View {
     @Binding var selection: Int
+    @EnvironmentObject var playback: PlaybackManager
+
+    private var miniShown: Bool { playback.isActive && !playback.showPlayerUI }
 
     var body: some View {
+        tabs
+            // The mini player sits just above the tab bar while something is paused/playing in the background.
+            .overlay(alignment: .bottom) {
+                if miniShown {
+                    MiniPlayer()
+                        .padding(.horizontal, 8)
+                        .padding(.bottom, MiniPlayer.tabBarClearance)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
+            }
+            .animation(.easeInOut(duration: 0.25), value: miniShown)
+    }
+
+    private var tabs: some View {
         TabView(selection: $selection) {
-            NavigationStack { HomeView() }
+            NavigationStack { HomeView() }.miniPlayerSpace()
                 .tabItem { Label("Home", systemImage: "house") }.tag(0)
-            NavigationStack { LibrariesView() }
+            NavigationStack { LibrariesView() }.miniPlayerSpace()
                 .tabItem { Label("Libraries", systemImage: "square.grid.2x2") }.tag(1)
-            NavigationStack { SearchView() }
+            NavigationStack { SearchView() }.miniPlayerSpace()
                 .tabItem { Label("Search", systemImage: "magnifyingglass") }.tag(2)
-            NavigationStack { SettingsView() }
+            NavigationStack { SettingsView() }.miniPlayerSpace()
                 .tabItem { Label("Settings", systemImage: "gear") }.tag(3)
         }
     }

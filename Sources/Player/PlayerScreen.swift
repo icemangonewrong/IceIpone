@@ -11,14 +11,14 @@ struct PlayerScreen: View {
 
             if playback.carScreenActive {
                 CarRemoteView()
-                    .overlay(alignment: .topLeading) { CloseButton().padding() }
+                    .overlay(alignment: .topLeading) { CloseButton(minimizes: false).padding() }
             } else if playback.isActive {
                 PlayerView()
             } else if let err = playback.errorMessage {
                 ErrorPanel(message: err)
             } else {
                 OrangeSpinner(size: 56)
-                CloseButton()
+                CloseButton(minimizes: false)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                     .padding()
             }
@@ -389,12 +389,18 @@ private struct TrailingIconLabelStyle: LabelStyle {
 
 private struct CloseButton: View {
     @EnvironmentObject var playback: PlaybackManager
+    /// true: pause and drop to the mini player. false: stop playback.
+    var minimizes = true
 
     var body: some View {
         Button {
-            Task { await playback.stop() }
+            if minimizes && playback.isActive {
+                playback.minimize()
+            } else {
+                Task { await playback.stop() }
+            }
         } label: {
-            Image(systemName: "xmark")
+            Image(systemName: minimizes && playback.isActive ? "chevron.down" : "xmark")
                 .font(.system(size: 18, weight: .bold))
                 .frame(width: 40, height: 40)
                 .background(.ultraThinMaterial, in: Circle())
@@ -423,6 +429,9 @@ private struct ErrorPanel: View {
 
 /// Hosts the shared video view that VLC draws into.
 struct VideoHost: UIViewRepresentable {
+    /// Changing this re-attaches the video here (used by the mini player).
+    var attachKey = 0
+
     func makeUIView(context: Context) -> UIView {
         let container = UIView()
         container.backgroundColor = .black

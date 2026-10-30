@@ -63,8 +63,13 @@ final class AppState: ObservableObject {
 
         excludedSections = Set(defaults.stringArray(forKey: Keys.excluded) ?? [])
         pauseWhenMoving = defaults.object(forKey: Keys.pauseWhenMoving) as? Bool ?? true
-        let savedBuffer = defaults.object(forKey: Keys.bufferMinutes) as? Int ?? 10
-        bufferMinutes = AppState.bufferChoices.contains(savedBuffer) ? savedBuffer : 10
+        // Default load-ahead is 2 minutes (it used to be 10; move anyone still on the old default).
+        if !defaults.bool(forKey: "bufferDefault2") {
+            if defaults.object(forKey: Keys.bufferMinutes) as? Int == 10 { defaults.set(2, forKey: Keys.bufferMinutes) }
+            defaults.set(true, forKey: "bufferDefault2")
+        }
+        let savedBuffer = defaults.object(forKey: Keys.bufferMinutes) as? Int ?? 2
+        bufferMinutes = AppState.bufferChoices.contains(savedBuffer) ? savedBuffer : 2
         tapToPause = defaults.object(forKey: Keys.tapToPause) as? Bool ?? false
         audioDelays = defaults.dictionary(forKey: Keys.audioDelays) as? [String: Int] ?? [:]
 

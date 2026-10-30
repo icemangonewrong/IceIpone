@@ -218,6 +218,20 @@ final class PlaybackManager: NSObject, ObservableObject {
         }
     }
 
+    // MARK: - Mini player
+
+    /// Pause and shrink to the mini player along the bottom of the app.
+    func minimize() {
+        if wantsPlay { togglePlayPause() }
+        showPlayerUI = false
+    }
+
+    /// Back to the full-screen player from the mini player.
+    func expand() {
+        guard isActive else { return }
+        showPlayerUI = true
+    }
+
     // MARK: - Controls
 
     func togglePlayPause() {
