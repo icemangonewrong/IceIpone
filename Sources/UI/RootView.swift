@@ -54,7 +54,7 @@ struct SignInView: View {
                 .resizable()
                 .frame(width: 140, height: 140)
                 .clipShape(RoundedRectangle(cornerRadius: 32, style: .continuous))
-            Text("CarPlex").font(.largeTitle.bold())
+            Text("IcePlex").font(.largeTitle.bold())
             Text("Sign in with your Plex account. Safari will open; approve the sign-in, then come back here.")
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)

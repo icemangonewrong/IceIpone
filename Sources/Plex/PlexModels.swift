@@ -77,6 +77,34 @@ struct PlexPart: Decodable, Hashable {
     let container: String?
     let duration: Int?
     let size: Int64?
+    let Stream: [PlexStream]?
+}
+
+/// One audio / video / subtitle stream inside (or next to) a file.
+struct PlexStream: Decodable, Hashable {
+    let streamType: Int?
+    let key: String?
+    let languageCode: String?
+    let language: String?
+    let displayTitle: String?
+    let title: String?
+    let forced: Bool?
+
+    /// A subtitle file stored next to the video (.srt etc.), as opposed to one inside it.
+    var isExternalSubtitle: Bool { streamType == 3 && key != nil }
+    var label: String { displayTitle ?? title ?? language ?? "External subtitles" }
+}
+
+/// Intro / credits position that the Plex server detected.
+struct PlexMarker: Decodable, Hashable {
+    let type: String?
+    let startTimeOffset: Int?
+    let endTimeOffset: Int?
+
+    var start: Double { Double(startTimeOffset ?? 0) / 1000 }
+    var end: Double { Double(endTimeOffset ?? startTimeOffset ?? 0) / 1000 }
+    var isIntro: Bool { type == "intro" }
+    var isCredits: Bool { type == "credits" }
 }
 
 struct PlexMedia: Decodable, Hashable {
@@ -137,6 +165,7 @@ struct PlexItem: Decodable, Identifiable, Hashable {
     let Genre: [PlexTag]?
     let Director: [PlexTag]?
     let Role: [PlexRole]?
+    let Marker: [PlexMarker]?
 
     var id: String { ratingKey.value }
 

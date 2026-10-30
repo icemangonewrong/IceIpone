@@ -18,7 +18,7 @@ enum PlexError: LocalizedError {
 
 /// Talks to plex.tv and to your Plex Media Server.
 final class PlexClient {
-    static let product = "CarPlex"
+    static let product = "IcePlex"
 
     let clientIdentifier: String
     var token: String?
@@ -47,7 +47,7 @@ final class PlexClient {
             "X-Plex-Version": "1.0",
             "X-Plex-Platform": "iOS",
             "X-Plex-Device": "iPhone",
-            "X-Plex-Device-Name": "CarPlex",
+            "X-Plex-Device-Name": "IcePlex",
         ]
         if let t = token { h["X-Plex-Token"] = t }
         return h
@@ -219,6 +219,29 @@ final class PlexClient {
     func nextEpisode(showKey: String) async throws -> PlexItem? {
         let eps = try decodeItems(try await serverGET("/library/metadata/\(showKey)/allLeaves"))
         return eps.first { ($0.viewOffset ?? 0) > 0 } ?? eps.first { ($0.viewCount ?? 0) == 0 } ?? eps.first
+    }
+
+    /// Full details including intro/credits markers and subtitle files.
+    func details(_ ratingKey: String) async throws -> PlexItem? {
+        try decodeItems(try await serverGET("/library/metadata/\(ratingKey)",
+                                            query: [URLQueryItem(name: "includeMarkers", value: "1")])).first
+    }
+
+    /// The episode right after / before this one, across seasons.
+    func episode(adjacentTo item: PlexItem, offset: Int) async throws -> PlexItem? {
+        guard item.type == "episode", let show = item.grandparentRatingKey?.value else { return nil }
+        let eps = try decodeItems(try await serverGET("/library/metadata/\(show)/allLeaves"))
+        guard let i = eps.firstIndex(where: { $0.ratingKey == item.ratingKey }) else { return nil }
+        let j = i + offset
+        return eps.indices.contains(j) ? eps[j] : nil
+    }
+
+    /// Address of a subtitle file Plex keeps next to a video.
+    func streamURL(_ key: String) -> URL? {
+        guard let server else { return nil }
+        var comps = URLComponents(string: server.baseURL + key)
+        comps?.queryItems = [URLQueryItem(name: "X-Plex-Token", value: server.accessToken)]
+        return comps?.url
     }
 
     func search(_ text: String) async throws -> [PlexItem] {

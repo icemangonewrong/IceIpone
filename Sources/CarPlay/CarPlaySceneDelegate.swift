@@ -106,7 +106,7 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
                 sections.append(CPListSection(items: [empty]))
             }
 
-            let list = CPListTemplate(title: "CarPlex", sections: sections)
+            let list = CPListTemplate(title: "IcePlex", sections: sections)
             interfaceController?.pushTemplate(list, animated: true, completion: nil)
         }
     }
@@ -211,7 +211,7 @@ final class CarVideoViewController: UIViewController {
         video.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         view.addSubview(video)
 
-        idleLabel.text = "CarPlex\nTap Browse to pick something"
+        idleLabel.text = "IcePlex\nTap Browse to pick something"
         idleLabel.numberOfLines = 0
         idleLabel.textAlignment = .center
         idleLabel.textColor = .lightGray

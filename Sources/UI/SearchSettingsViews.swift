@@ -88,6 +88,35 @@ struct SettingsView: View {
             }
 
             Section {
+                Toggle("Pause when the screen is tapped", isOn: $app.tapToPause)
+            } header: {
+                Text("Player")
+            } footer: {
+                Text("When this is off, tapping the video just shows or hides the controls.")
+            }
+
+            Section {
+                if app.audioDelays.isEmpty {
+                    Text("No devices adjusted yet").foregroundStyle(.secondary)
+                }
+                ForEach(app.audioDelays.keys.sorted(), id: \.self) { device in
+                    HStack {
+                        Text(device)
+                        Spacer()
+                        let ms = app.audioDelays[device] ?? 0
+                        Text("\(ms > 0 ? "+" : "")\(ms) ms").foregroundStyle(.secondary)
+                        Button("Reset") { app.audioDelays[device] = nil }
+                            .buttonStyle(.borderless)
+                            .tint(.orange)
+                    }
+                }
+            } header: {
+                Text("Audio delay")
+            } footer: {
+                Text("Set from the player's audio delay button. Each Bluetooth device (like your truck) keeps its own setting and it's used automatically when that device is connected.")
+            }
+
+            Section {
                 Toggle("Pause video when moving", isOn: $app.pauseWhenMoving)
             } header: {
                 Text("Car screen")

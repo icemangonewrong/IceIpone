@@ -1,4 +1,4 @@
-name: Build CarPlex
+name: Build IcePlex (iPhone)
 
 on:
   push:
@@ -32,8 +32,8 @@ jobs:
       - name: Build app (no signing)
         run: |
           set -o pipefail
-          xcodebuild -project CarPlex.xcodeproj \
-            -scheme CarPlex \
+          xcodebuild -project IcePlex.xcodeproj \
+            -scheme IcePlex \
             -configuration Release \
             -sdk iphoneos \
             -destination 'generic/platform=iOS' \
@@ -41,29 +41,37 @@ jobs:
             -clonedSourcePackagesDirPath build/SourcePackages \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
             build 2>&1 | tee build.log | grep -E "error:|warning: unre|BUILD (SUCCEEDED|FAILED)" || true
-          test -d build/Build/Products/Release-iphoneos/CarPlex.app
+          test -d build/Build/Products/Release-iphoneos/IcePlex.app
 
+      # Turn compiler errors into GitHub annotations so they're readable without the full log.
       - name: Show errors
         if: failure()
         run: |
-          grep -E " error: " build.log | sort -u | head -40 || true
+          grep -E " error: " build.log | sort -u | head -40 > errors.txt || true
+          cat errors.txt
+          while IFS= read -r line; do
+            f=$(echo "$line" | sed -E 's#^.*/(Sources/[^:]+):([0-9]+):.*$#\1#')
+            l=$(echo "$line" | sed -E 's#^.*/Sources/[^:]+:([0-9]+):.*$#\1#')
+            msg=$(echo "$line" | sed -E 's#^.* error: ##')
+            echo "::error file=$f,line=$l::$f:$l $msg"
+          done < errors.txt
 
       - name: Package Feather IPA (sign with your Arctic cert)
         run: |
           rm -rf Payload && mkdir Payload
-          cp -R build/Build/Products/Release-iphoneos/CarPlex.app Payload/
-          zip -qry CarPlex.ipa Payload
+          cp -R build/Build/Products/Release-iphoneos/IcePlex.app Payload/
+          zip -qry IcePlex.ipa Payload
 
       - name: Package CarPlay IPA (for TrollStore / jailbreak)
         run: |
           rm -rf Payload && mkdir Payload
-          cp -R build/Build/Products/Release-iphoneos/CarPlex.app Payload/
-          ldid -SCarPlex-CarPlay.entitlements Payload/CarPlex.app/CarPlex
-          zip -qry CarPlex-CarPlay.ipa Payload
+          cp -R build/Build/Products/Release-iphoneos/IcePlex.app Payload/
+          ldid -SIcePlex-CarPlay.entitlements Payload/IcePlex.app/IcePlex
+          zip -qry IcePlex-CarPlay.ipa Payload
 
       - uses: actions/upload-artifact@v4
         with:
-          name: CarPlex-ipas
+          name: IcePlex-ipas
           path: |
-            CarPlex.ipa
-            CarPlex-CarPlay.ipa
+            IcePlex.ipa
+            IcePlex-CarPlay.ipa

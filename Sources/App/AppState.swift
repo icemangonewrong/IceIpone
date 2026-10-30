@@ -29,6 +29,15 @@ final class AppState: ObservableObject {
         didSet { UserDefaults.standard.set(bufferMinutes, forKey: Keys.bufferMinutes) }
     }
     static let bufferChoices = [2, 5, 10, 20, 30]
+    /// Tapping the video pauses/plays (otherwise a tap just shows or hides the controls).
+    @Published var tapToPause: Bool {
+        didSet { UserDefaults.standard.set(tapToPause, forKey: Keys.tapToPause) }
+    }
+    /// Audio delay in milliseconds for each audio output (Bluetooth car stereo, headphones...).
+    /// Negative = sound earlier, which fixes Bluetooth lag.
+    @Published var audioDelays: [String: Int] {
+        didSet { UserDefaults.standard.set(audioDelays, forKey: Keys.audioDelays) }
+    }
 
     private enum Keys {
         static let clientID = "clientIdentifier"
@@ -36,6 +45,8 @@ final class AppState: ObservableObject {
         static let excluded = "excludedSections"
         static let pauseWhenMoving = "pauseWhenMoving"
         static let bufferMinutes = "bufferMinutes"
+        static let tapToPause = "tapToPause"
+        static let audioDelays = "audioDelays"
         static let tokenAccount = "plexToken"
     }
 
@@ -54,6 +65,8 @@ final class AppState: ObservableObject {
         pauseWhenMoving = defaults.object(forKey: Keys.pauseWhenMoving) as? Bool ?? true
         let savedBuffer = defaults.object(forKey: Keys.bufferMinutes) as? Int ?? 10
         bufferMinutes = AppState.bufferChoices.contains(savedBuffer) ? savedBuffer : 10
+        tapToPause = defaults.object(forKey: Keys.tapToPause) as? Bool ?? false
+        audioDelays = defaults.dictionary(forKey: Keys.audioDelays) as? [String: Int] ?? [:]
 
         token = Keychain.read(Keys.tokenAccount)
         if let data = defaults.data(forKey: Keys.server),

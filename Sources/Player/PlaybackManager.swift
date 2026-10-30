@@ -42,6 +42,29 @@ final class PlaybackManager: NSObject, ObservableObject {
     /// True while playback is held because the vehicle is moving.
     @Published private(set) var heldForMotion = false
 
+    /// The episode after the current one (nil for movies or the last episode).
+    @Published private(set) var nextItem: PlexItem?
+    /// Intro / credits currently on screen that can be skipped.
+    @Published private(set) var skipMarker: PlexMarker?
+    /// Seconds left before the next episode starts; non-nil while the Up Next card shows.
+    @Published private(set) var upNextSeconds: Int?
+    /// Moving to another episode.
+    @Published private(set) var switching = false
+    @Published private(set) var subtitleDelayMs = 0
+    /// Name of the speaker/headphones/car the sound is going to (e.g. "Silverado").
+    @Published private(set) var audioOutputName = ""
+    /// Short message shown on the video for a few seconds.
+    @Published private(set) var toast: String?
+
+    static let upNextCountdown = 10
+    private var markers: [PlexMarker] = []
+    private var upNextCancelled = false
+    private var upNextDeadline: Date?
+    private var skippedMarkers = Set<Double>()
+    private var pendingSubtitles: [URL] = []
+    private var routeObserver: NSObjectProtocol?
+    private var toastTask: Task<Void, Never>?
+
     /// The view VLC draws into. It moves between the phone and car screens.
     let videoView: UIView = {
         let v = UIView()
@@ -72,6 +95,11 @@ final class PlaybackManager: NSObject, ObservableObject {
         super.init()
         location.delegate = self
         setupRemoteCommands()
+        audioOutputName = Self.currentOutputName()
+        routeObserver = NotificationCenter.default.addObserver(
+            forName: AVAudioSession.routeChangeNotification, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in self?.audioRouteChanged() }
+        }
     }
 
     // MARK: - Start / stop
@@ -102,6 +130,15 @@ final class PlaybackManager: NSObject, ObservableObject {
         }
 
         current = target
+        nextItem = nil
+        markers = []
+        skipMarker = nil
+        upNextSeconds = nil
+        upNextDeadline = nil
+        upNextCancelled = false
+        skippedMarkers = []
+        pendingSubtitles = []
+        subtitleDelayMs = 0
         duration = Double(target.duration ?? 0) / 1000
         var resume = fromStart ? 0 : Double(target.viewOffset ?? 0) / 1000
         if duration > 0, resume > duration - 120 { resume = 0 }  // nearly done: start over
@@ -130,6 +167,7 @@ final class PlaybackManager: NSObject, ObservableObject {
         startVLC(at: resume)
         startTimers()
         updateNowPlaying()
+        fetchExtras(for: target)
     }
 
     /// Stops playback and saves the position to Plex.
@@ -155,6 +193,10 @@ final class PlaybackManager: NSObject, ObservableObject {
 
         isActive = false
         current = nil
+        nextItem = nil
+        skipMarker = nil
+        upNextSeconds = nil
+        upNextDeadline = nil
         isPlaying = false
         isBuffering = false
         offline = false
@@ -284,8 +326,10 @@ final class PlaybackManager: NSObject, ObservableObject {
         guard let p = vlc else { return }
         switch p.state {
         case .playing:
+            applyDelays(to: p)   // also after reconnecting from a dead zone (new player)
             hasPlayedSinceStart = true
             restartsWithoutPlaying = 0
+            addPendingSubtitles()
             if !wantsPlay || heldForMotion { p.pause() }
             if duration <= 0, let len = p.media?.length.intValue, len > 0 { duration = Double(len) / 1000 }
         case .ended:
@@ -342,6 +386,7 @@ final class PlaybackManager: NSObject, ObservableObject {
             && Date().timeIntervalSince(lastProgress) > 15 {
             restartVLC()
         }
+        updateMarkers()
     }
 
     private func reportNow() {
@@ -353,13 +398,192 @@ final class PlaybackManager: NSObject, ObservableObject {
         updateNowPlaying()
     }
 
-    /// End of video: mark watched and roll into the next episode if there is one.
+    /// End of video: mark watched and roll into the next episode (unless Up Next was cancelled).
     private func finished() async {
         guard let item = current else { return }
         currentTime = duration
-        let next = await nextEpisode(after: item)
+        var next: PlexItem? = nil
+        if !upNextCancelled {
+            if let n = nextItem { next = n } else { next = await nextEpisode(after: item) }
+        }
         await stop(reportOnly: next != nil)
-        if let next { await play(next, fromStart: true) }
+        if let next {
+            await client.markWatched(item.ratingKey.value)
+            await play(next, fromStart: true)
+        }
+    }
+
+    // MARK: - Previous / next episode
+
+    /// More than 5 seconds in: back to the start. Within the first 5 seconds: the previous episode.
+    func previous() {
+        guard let item = current, !switching else { return }
+        if currentTime > 5 || item.type != "episode" {
+            seek(to: 0)
+            if !wantsPlay { togglePlayPause() }
+            return
+        }
+        switching = true
+        Task {
+            let prev = try? await client.episode(adjacentTo: item, offset: -1)
+            if let prev {
+                await switchTo(prev, markWatched: false)
+            } else {
+                switching = false
+                seek(to: 0)
+                showToast("This is the first episode")
+            }
+        }
+    }
+
+    func playNext() {
+        guard let next = nextItem, !switching else { return }
+        Task { await switchTo(next, markWatched: false) }
+    }
+
+    private func switchTo(_ other: PlexItem, markWatched: Bool) async {
+        let leaving = current
+        switching = true
+        upNextSeconds = nil
+        upNextDeadline = nil
+        if markWatched, let leaving {
+            let c = client
+            Task { await c.markWatched(leaving.ratingKey.value) }
+        }
+        await play(other, fromStart: true)
+        switching = false
+    }
+
+    // MARK: - Skip intro / credits, Up Next
+
+    private func fetchExtras(for item: PlexItem) {
+        let c = client
+        Task {
+            let full = try? await c.details(item.ratingKey.value)
+            let next = item.type == "episode" ? (try? await c.episode(adjacentTo: item, offset: 1)) : nil
+            guard let current, current.ratingKey == item.ratingKey else { return }
+            markers = (full?.Marker ?? []).filter { $0.isIntro || $0.isCredits }
+            nextItem = next
+            let streams = full?.firstPart?.Stream ?? []
+            pendingSubtitles = streams.filter { $0.isExternalSubtitle }.compactMap { s in
+                s.key.flatMap { c.streamURL($0) }
+            }
+            if hasPlayedSinceStart { addPendingSubtitles() }
+        }
+    }
+
+    private func addPendingSubtitles() {
+        guard let vlc, !pendingSubtitles.isEmpty else { return }
+        let subs = pendingSubtitles
+        pendingSubtitles = []
+        for url in subs {
+            _ = vlc.addPlaybackSlave(url, type: .subtitle, enforce: false)
+        }
+        objectWillChange.send()
+    }
+
+    private func updateMarkers() {
+        guard isActive, !switching else { skipMarker = nil; return }
+        let t = currentTime
+        let credits = markers.first { $0.isCredits && $0.end >= duration - 15 }
+        let startAt: Double? = credits?.start ?? (duration > 180 ? duration - 30 : nil)
+        if upNextCancelled, let s = startAt, t < s { upNextCancelled = false }  // rewound out of the credits
+
+        if let next = nextItem, !upNextCancelled, let s = startAt, t >= s, duration - t > 1 {
+            if upNextDeadline == nil {
+                upNextDeadline = Date().addingTimeInterval(Double(Self.upNextCountdown))
+            } else if (!wantsPlay || isBuffering), let left = upNextSeconds {
+                upNextDeadline = Date().addingTimeInterval(Double(left))  // hold the count while paused
+            }
+            let left = max(0, Int(ceil(upNextDeadline?.timeIntervalSinceNow ?? 0)))
+            upNextSeconds = left
+            skipMarker = nil
+            if left <= 0 {
+                Task { await switchTo(next, markWatched: true) }
+            }
+            return
+        }
+        upNextSeconds = nil
+        upNextDeadline = nil
+
+        let active = markers.first { t >= $0.start - 0.5 && t < $0.end - 1 }
+        if let m = active, !skippedMarkers.contains(m.start) {
+            skipMarker = m
+        } else {
+            skipMarker = nil
+        }
+    }
+
+    func skipCurrentMarker() {
+        guard let m = skipMarker else { return }
+        skippedMarkers.insert(m.start)
+        skipMarker = nil
+        if m.isCredits && m.end >= duration - 15 {
+            if let next = nextItem {
+                Task { await switchTo(next, markWatched: true) }
+            } else {
+                seek(to: duration - 2)
+            }
+        } else {
+            seek(to: m.end)
+        }
+    }
+
+    func playUpNextNow() {
+        guard let next = nextItem else { return }
+        Task { await switchTo(next, markWatched: true) }
+    }
+
+    func cancelUpNext() {
+        upNextCancelled = true
+        upNextSeconds = nil
+        upNextDeadline = nil
+    }
+
+    // MARK: - Subtitle timing & audio delay (remembered per audio output)
+
+    func setSubtitleDelay(_ ms: Int) {
+        subtitleDelayMs = ms
+        vlc?.currentVideoSubTitleDelay = ms * 1000   // VLC uses microseconds
+    }
+
+    var audioDelayMs: Int { state.audioDelays[audioOutputName] ?? 0 }
+
+    func setAudioDelay(_ ms: Int) {
+        var d = state.audioDelays
+        d[audioOutputName] = ms == 0 ? nil : ms
+        state.audioDelays = d
+        vlc?.currentAudioPlaybackDelay = ms * 1000
+        objectWillChange.send()
+    }
+
+    private func applyDelays(to p: VLCMediaPlayer) {
+        p.currentAudioPlaybackDelay = audioDelayMs * 1000
+        p.currentVideoSubTitleDelay = subtitleDelayMs * 1000
+    }
+
+    private func audioRouteChanged() {
+        let name = Self.currentOutputName()
+        guard name != audioOutputName else { return }
+        audioOutputName = name
+        vlc?.currentAudioPlaybackDelay = audioDelayMs * 1000
+        if isActive {
+            let ms = audioDelayMs
+            showToast("Audio: \(name)" + (ms != 0 ? "  ·  delay \(ms > 0 ? "+" : "")\(ms) ms" : ""))
+        }
+    }
+
+    static func currentOutputName() -> String {
+        AVAudioSession.sharedInstance().currentRoute.outputs.first?.portName ?? "iPhone"
+    }
+
+    func showToast(_ text: String) {
+        toast = text
+        toastTask?.cancel()
+        toastTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 3_500_000_000)
+            if !Task.isCancelled { self?.toast = nil }
+        }
     }
 
     private func nextEpisode(after item: PlexItem) async -> PlexItem? {
@@ -401,6 +625,14 @@ final class PlaybackManager: NSObject, ObservableObject {
         c.skipBackwardCommand.preferredIntervals = [10]
         c.skipBackwardCommand.addTarget { [weak self] _ in
             Task { @MainActor in self?.skip(-10) }
+            return .success
+        }
+        c.nextTrackCommand.addTarget { [weak self] _ in
+            Task { @MainActor in self?.playNext() }
+            return .success
+        }
+        c.previousTrackCommand.addTarget { [weak self] _ in
+            Task { @MainActor in self?.previous() }
             return .success
         }
         c.changePlaybackPositionCommand.addTarget { [weak self] event in
