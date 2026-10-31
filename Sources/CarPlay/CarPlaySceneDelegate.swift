@@ -14,6 +14,14 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
     private var carWindow: CPWindow?
     private var mapTemplate: CPMapTemplate?
     private var playPauseButton: CPMapButton?
+    private var playPauseBarButton: CPBarButton?
+    private var idleBar: ([CPBarButton], [CPBarButton]) = ([], [])
+    private var playingBar: ([CPBarButton], [CPBarButton]) = ([], [])
+
+    static func symbol(_ name: String) -> UIImage {
+        let cfg = UIImage.SymbolConfiguration(pointSize: 20, weight: .semibold)
+        return (UIImage(systemName: name, withConfiguration: cfg) ?? UIImage()).withRenderingMode(.alwaysTemplate)
+    }
     private var cancellables = Set<AnyCancellable>()
 
     private var app: AppState { AppState.shared }
@@ -31,24 +39,27 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
         playback.carScreenActive = true
 
         let map = CPMapTemplate()
+        // Top bar: always up when nothing is playing or it's paused; hides itself while playing
+        // and comes back when the screen is tapped (CarPlay handles that).
         map.automaticallyHidesNavigationBar = false
-        map.leadingNavigationBarButtons = [
-            CPBarButton(title: "Browse") { [weak self] _ in self?.showBrowse() },
-        ]
-        map.trailingNavigationBarButtons = [
-            CPBarButton(title: "Stop") { [weak self] _ in
-                Task { await self?.playback.stop() }
-            },
-        ]
+        let browse = CPBarButton(title: "Browse") { [weak self] _ in self?.showBrowse() }
+        let back10 = CPBarButton(image: Self.symbol("gobackward.10")) { [weak self] _ in self?.playback.skip(-10) }
+        let playPauseBar = CPBarButton(image: Self.symbol("play.fill")) { [weak self] _ in self?.playback.togglePlayPause() }
+        let fwd10 = CPBarButton(image: Self.symbol("goforward.10")) { [weak self] _ in self?.playback.skip(10) }
+        idleBar = ([browse], [])
+        playingBar = ([browse, back10], [playPauseBar, fwd10])
+        playPauseBarButton = playPauseBar
+        map.leadingNavigationBarButtons = [browse]
+        map.trailingNavigationBarButtons = []
 
         let back = CPMapButton { [weak self] _ in self?.playback.skip(-10) }
-        back.image = UIImage(systemName: "gobackward.10")
+        back.image = Self.symbol("gobackward.10")
         let playPause = CPMapButton { [weak self] _ in self?.playback.togglePlayPause() }
-        playPause.image = UIImage(systemName: "playpause.fill")
+        playPause.image = Self.symbol("playpause.fill")
         let forward = CPMapButton { [weak self] _ in self?.playback.skip(10) }
-        forward.image = UIImage(systemName: "goforward.10")
+        forward.image = Self.symbol("goforward.10")
         let next = CPMapButton { [weak self] _ in self?.playback.playNext() }
-        next.image = UIImage(systemName: "forward.end.fill")
+        next.image = Self.symbol("forward.end.fill")
         map.mapButtons = [back, playPause, forward, next]
         // Keep the playback buttons on screen (the car screen doesn't pass touches to the video itself).
         map.hidesButtonsWithNavigationBar = false
@@ -60,7 +71,22 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
         playback.$isPlaying
             .receive(on: RunLoop.main)
             .sink { [weak self] playing in
-                self?.playPauseButton?.image = UIImage(systemName: playing ? "pause.fill" : "play.fill")
+                let img = Self.symbol(playing ? "pause.fill" : "play.fill")
+                self?.playPauseButton?.image = img
+                self?.playPauseBarButton?.image = img
+                // Get the bar out of the way while watching; tap the screen to bring it back.
+                self?.mapTemplate?.automaticallyHidesNavigationBar = playing
+            }
+            .store(in: &cancellables)
+
+        playback.$isActive
+            .receive(on: RunLoop.main)
+            .sink { [weak self] active in
+                guard let self, let map = self.mapTemplate else { return }
+                let bar = active ? self.playingBar : self.idleBar
+                map.leadingNavigationBarButtons = bar.0
+                map.trailingNavigationBarButtons = bar.1
+                if !active { map.automaticallyHidesNavigationBar = false }
             }
             .store(in: &cancellables)
     }
@@ -86,9 +112,41 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
 
             var sections: [CPListSection] = []
 
-            let cw = Array(app.continueWatching.prefix(12)).map { makeItemRow($0) }
-            if !cw.isEmpty {
-                sections.append(CPListSection(items: cw, header: "Continue Watching", sectionIndexTitle: nil))
+            if playback.isActive, let cur = playback.current {
+                var rows: [CPListItem] = []
+                if let next = playback.nextItem {
+                    let r = CPListItem(text: "Play next episode", detailText: Self.subtitle(for: next),
+                                       image: Self.symbol("forward.end.fill"))
+                    r.handler = { [weak self] _, done in
+                        self?.playback.playNext()
+                        self?.interfaceController?.popToRootTemplate(animated: true, completion: nil)
+                        done()
+                    }
+                    rows.append(r)
+                }
+                let stop = CPListItem(text: "Stop", detailText: "Saves your spot in \(Self.title(for: cur))",
+                                      image: Self.symbol("stop.fill"))
+                stop.handler = { [weak self] _, done in
+                    Task { await self?.playback.stop() }
+                    self?.interfaceController?.popToRootTemplate(animated: true, completion: nil)
+                    done()
+                }
+                rows.append(stop)
+                sections.append(CPListSection(items: rows, header: "Now Playing", sectionIndexTitle: nil))
+            }
+
+            let cwItems = Array(app.continueWatching.prefix(12))
+            if !cwItems.isEmpty {
+                // TEST: a row of bigger posters (CarPlay may not allow this for this kind of app).
+                let posters = CPListItem(text: "Continue Watching — posters (test)", detailText: "Bigger pictures",
+                                         image: Self.symbol("square.grid.2x2"))
+                posters.accessoryType = .disclosureIndicator
+                posters.handler = { [weak self] _, done in
+                    self?.showPosterRow(cwItems)
+                    done()
+                }
+                let cw = cwItems.map { makeItemRow($0) }
+                sections.append(CPListSection(items: [posters] + cw, header: "Continue Watching", sectionIndexTitle: nil))
             }
 
             let libs: [CPListItem] = app.visibleSections.map { section in
@@ -158,13 +216,50 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
         }
     }
 
+    /// Show name for episodes, title for everything else.
+    static func title(for item: PlexItem) -> String {
+        item.type == "episode" ? (item.grandparentTitle ?? item.displayTitle) : item.displayTitle
+    }
+
+    /// "S5 · E10 · Weight" for episodes, the year (or other subtitle) for everything else.
+    static func subtitle(for item: PlexItem) -> String? {
+        if item.type == "episode" {
+            var bits: [String] = []
+            if let s = item.parentIndex { bits.append("S\(s)") }
+            if let e = item.index { bits.append("E\(e)") }
+            if let t = item.title, !t.isEmpty { bits.append(t) }
+            return bits.isEmpty ? item.displaySubtitle : bits.joined(separator: " · ")
+        }
+        return item.displaySubtitle
+    }
+
+    /// TEST: Continue Watching as one row of bigger posters; tap a poster to play it.
+    private func showPosterRow(_ items: [PlexItem]) {
+        let shown = Array(items.prefix(CPMaximumNumberOfGridImages))
+        let blank = UIImage.from(color: UIColor(white: 0.2, alpha: 1), size: CGSize(width: 60, height: 90))
+        let row = CPListImageRowItem(text: "Continue Watching", images: shown.map { _ in blank })
+        row.listImageRowHandler = { [weak self] _, index, done in
+            if index < shown.count { self?.startPlayback(shown[index]) }
+            done()
+        }
+        let rest = shown.map { makeItemRow($0) }
+        let list = CPListTemplate(title: "Continue Watching", sections: [CPListSection(items: [row] + rest)])
+        interfaceController?.pushTemplate(list, animated: true, completion: nil)
+        Task {
+            var images = shown.map { _ in blank }
+            for (i, item) in shown.enumerated() {
+                guard let url = app.client.imageURL(item.posterPath, width: 200, height: 300),
+                      let result = try? await URLSession.shared.dataCompat(from: url),
+                      let img = UIImage(data: result.0) else { continue }
+                images[i] = img
+                row.update(images)
+            }
+        }
+    }
+
     /// One row in a CarPlay list. Playable items start playing; shows/seasons drill down.
     private func makeItemRow(_ item: PlexItem) -> CPListItem {
-        let title = item.type == "episode" ? (item.title ?? "") : item.displayTitle
-        var detail: String? = item.type == "episode" ? "\(item.displayTitle) · \(item.displaySubtitle ?? "")" : item.displaySubtitle
-        if let p = item.progress { detail = (detail.map { $0 + " · " } ?? "") + "\(Int(p * 100))% watched" }
-
-        let row = CPListItem(text: title, detailText: detail)
+        let row = CPListItem(text: Self.title(for: item), detailText: Self.subtitle(for: item))
         if let p = item.progress {
             row.playbackProgress = CGFloat(p)
         }
@@ -193,6 +288,15 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
         Task {
             await playback.play(item)
             interfaceController?.popToRootTemplate(animated: true, completion: nil)
+        }
+    }
+}
+
+extension UIImage {
+    static func from(color: UIColor, size: CGSize) -> UIImage {
+        UIGraphicsImageRenderer(size: size).image { ctx in
+            color.setFill()
+            ctx.fill(CGRect(origin: .zero, size: size))
         }
     }
 }
