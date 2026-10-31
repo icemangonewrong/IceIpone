@@ -74,13 +74,12 @@ jobs:
         run: |
           rm -rf Payload && mkdir Payload
           cp -R build/Build/Products/Release-iphoneos/Ice.app Payload/
-          file Payload/Ice.app/Ice
-          ls Payload/Ice.app/Frameworks 2>/dev/null || true
-          if ! ldid -SIce-CarPlay.entitlements Payload/Ice.app/Ice > ldid.log 2>&1; then
-            cat ldid.log
-            while IFS= read -r line; do echo "::error::ldid: $line"; done < ldid.log
-            exit 1
+          # Ad-hoc sign with the CarPlay video permission (TrollStore keeps these permissions).
+          if [ -d Payload/Ice.app/Frameworks ]; then
+            find Payload/Ice.app/Frameworks -maxdepth 1 \( -name "*.framework" -o -name "*.dylib" \) -exec codesign --force --sign - {} \;
           fi
+          codesign --force --sign - --entitlements Ice-CarPlay.entitlements --generate-entitlement-der Payload/Ice.app
+          codesign -d --entitlements - Payload/Ice.app 2>&1 | grep -q carplay-video || { echo "::error::CarPlay permission missing after signing"; exit 1; }
           zip -qry Ice-CarPlay.ipa Payload
 
       - uses: actions/upload-artifact@v4
