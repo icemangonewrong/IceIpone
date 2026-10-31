@@ -301,9 +301,11 @@ final class TouchProbeView: UIView {
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        let maxW = max(bounds.width - safeAreaInsets.left - safeAreaInsets.right - 40, 200)
+        // CarPlay's app dock can sit over the left edge without reporting it as unsafe area.
+        let left = max(safeAreaInsets.left, bounds.width * 0.13) + 12
+        let maxW = max(bounds.width - left - safeAreaInsets.right - 24, 200)
         let size = panel.sizeThatFits(CGSize(width: maxW, height: 600))
-        panel.frame = CGRect(x: safeAreaInsets.left + 12, y: safeAreaInsets.top + 8,
+        panel.frame = CGRect(x: left, y: safeAreaInsets.top + 8,
                              width: size.width + 16, height: size.height + 12)
         button.sizeToFit()
         button.frame.size = CGSize(width: button.frame.width + 20, height: 46)
