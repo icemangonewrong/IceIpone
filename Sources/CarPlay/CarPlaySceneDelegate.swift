@@ -31,12 +31,14 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
         let video = CarVideoViewController()
         window.rootViewController = video
         carVideo = video
+        let traits = interfaceController.carTraitCollection
+        CarLog.add("connected · screen \(Int(window.bounds.width))x\(Int(window.bounds.height)) · idiom \(traits.userInterfaceIdiom.rawValue) · scale \(traits.displayScale)")
         playback.carScreenActive = true
 
         let map = CPMapTemplate()
         map.automaticallyHidesNavigationBar = false
         map.leadingNavigationBarButtons = [
-            CPBarButton(title: "Browse") { [weak self] _ in self?.showBrowse() },
+            CPBarButton(title: "Browse") { [weak self] _ in CarLog.add("Browse pressed"); self?.showBrowse() },
         ]
         map.trailingNavigationBarButtons = [
             CPBarButton(title: "Stop") { [weak self] _ in
@@ -57,7 +59,27 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
 
         map.mapDelegate = self
         mapTemplate = map
-        interfaceController.setRootTemplate(map, animated: false, completion: nil)
+        interfaceController.setRootTemplate(map, animated: false) { ok, error in
+            CarLog.add("setRootTemplate ok=\(ok) error=\(error.map { "\($0)" } ?? "none")")
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+            guard let ic = self?.interfaceController else { CarLog.add("2s: interface controller gone"); return }
+            let root = ic.rootTemplate.map { String(describing: type(of: $0)) } ?? "nil"
+            let top = ic.topTemplate.map { String(describing: type(of: $0)) } ?? "nil"
+            CarLog.add("2s: root=\(root) top=\(top) stack=\(ic.templates.count)")
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4) { [weak self] in
+            guard let ic = self?.interfaceController else { return }
+            let alert = CPAlertTemplate(titleVariants: ["Ice template test — press OK"], actions: [
+                CPAlertAction(title: "OK", style: .default) { _ in
+                    CarLog.add("alert OK pressed (CarPlay buttons work)")
+                    ic.dismissTemplate(animated: true, completion: nil)
+                },
+            ])
+            ic.presentTemplate(alert, animated: true) { ok, error in
+                CarLog.add("alert shown ok=\(ok) error=\(error.map { "\($0)" } ?? "none")")
+            }
+        }
 
         playback.$isPlaying
             .receive(on: RunLoop.main)
@@ -199,6 +221,22 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
     }
 }
 
+// DIAGNOSTICS: what CarPlay tells us, shown on the car screen (test build only).
+enum CarLog {
+    private(set) static var lines: [String] = []
+    static var onChange: (() -> Void)?
+    private static let start = Date()
+
+    static func add(_ text: String) {
+        let t = String(format: "%5.1fs", Date().timeIntervalSince(start))
+        DispatchQueue.main.async {
+            lines.append("\(t) \(text)")
+            if lines.count > 9 { lines.removeFirst(lines.count - 9) }
+            onChange?()
+        }
+    }
+}
+
 // TOUCH TEST: CarPlay reports drags on the map area through these callbacks.
 extension CarPlaySceneDelegate: CPMapTemplateDelegate {
     func mapTemplateDidBeginPanGesture(_ mapTemplate: CPMapTemplate) {
@@ -236,7 +274,7 @@ final class TouchProbeView: UIView {
         isMultipleTouchEnabled = true
 
         panel.numberOfLines = 0
-        panel.font = .monospacedDigitSystemFont(ofSize: 15, weight: .semibold)
+        panel.font = .monospacedDigitSystemFont(ofSize: 13, weight: .semibold)
         panel.textColor = .white
         panel.backgroundColor = UIColor.black.withAlphaComponent(0.7)
         panel.layer.cornerRadius = 8
@@ -252,6 +290,7 @@ final class TouchProbeView: UIView {
         button.addTarget(self, action: #selector(buttonTapped), for: .touchUpInside)
         addSubview(button)
 
+        CarLog.onChange = { [weak self] in self?.render() }
         addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(tapped(_:))))
         let pan = UIPanGestureRecognizer(target: self, action: #selector(panned(_:)))
         addGestureRecognizer(pan)
@@ -262,8 +301,9 @@ final class TouchProbeView: UIView {
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        let size = panel.sizeThatFits(CGSize(width: 330, height: 400))
-        panel.frame = CGRect(x: safeAreaInsets.left + 12, y: safeAreaInsets.top + 12,
+        let maxW = max(bounds.width - safeAreaInsets.left - safeAreaInsets.right - 40, 200)
+        let size = panel.sizeThatFits(CGSize(width: maxW, height: 600))
+        panel.frame = CGRect(x: safeAreaInsets.left + 12, y: safeAreaInsets.top + 8,
                              width: size.width + 16, height: size.height + 12)
         button.sizeToFit()
         button.frame.size = CGSize(width: button.frame.width + 20, height: 46)
@@ -277,14 +317,8 @@ final class TouchProbeView: UIView {
     }
 
     private func render() {
-        panel.text = """
-         TOUCH TEST
-         Touches:  \(counts[.touch] ?? 0)
-         Taps:     \(counts[.tap] ?? 0)
-         Drags:    \(counts[.drag] ?? 0)
-         Button:   \(counts[.button] ?? 0)
-         Last: \(lastEvent)
-        """
+        let counts = "touch \(counts[.touch] ?? 0) · tap \(counts[.tap] ?? 0) · drag \(counts[.drag] ?? 0) · button \(counts[.button] ?? 0)"
+        panel.text = " TEST 2  ·  " + counts + "\n" + CarLog.lines.map { " " + $0 }.joined(separator: "\n")
         setNeedsLayout()
     }
 
@@ -366,7 +400,7 @@ final class CarVideoViewController: UIViewController {
                 l.leadingAnchor.constraint(greaterThanOrEqualTo: view.leadingAnchor, constant: 20),
             ])
         }
-        idleLabel.centerYAnchor.constraint(equalTo: view.centerYAnchor).isActive = true
+        idleLabel.centerYAnchor.constraint(equalTo: view.centerYAnchor, constant: 60).isActive = true
         statusLabel.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -16).isActive = true
 
         // TOUCH TEST overlay on top of everything
