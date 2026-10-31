@@ -11,7 +11,7 @@ struct RootView: View {
             if !app.isSignedIn {
                 SignInView()
             } else if app.server == nil {
-                NavigationStack { ServerPickerView() }
+                NavStack { ServerPickerView() }
             } else {
                 MainTabs(selection: $tab)
             }
@@ -19,7 +19,7 @@ struct RootView: View {
         // Rebuild the screens when the accent color changes so everything picks it up.
         .id(accentHex)
         .preferredColorScheme(.dark)
-        .tint(Color(hex: accentHex))
+        .iceTint(Color(hex: accentHex))
         .fullScreenCover(isPresented: Binding(
             get: { playback.showPlayerUI },
             set: { shown in if !shown { playback.minimize() } }
@@ -40,7 +40,7 @@ struct MainTabs: View {
     var body: some View {
         tabs
             // The mini player sits just above the tab bar while something is paused/playing in the background.
-            .overlay(alignment: .bottom) {
+            .overlayCompat(alignment: .bottom) {
                 if miniShown {
                     MiniPlayer()
                         .padding(.horizontal, 8)
@@ -53,13 +53,13 @@ struct MainTabs: View {
 
     private var tabs: some View {
         TabView(selection: $selection) {
-            NavigationStack { HomeView() }.miniPlayerSpace()
+            NavStack { HomeView() }.miniPlayerSpace()
                 .tabItem { Label("Home", systemImage: "house") }.tag(0)
-            NavigationStack { LibrariesView() }.miniPlayerSpace()
+            NavStack { LibrariesView() }.miniPlayerSpace()
                 .tabItem { Label("Libraries", systemImage: "square.grid.2x2") }.tag(1)
-            NavigationStack { SearchView() }.miniPlayerSpace()
+            NavStack { SearchView() }.miniPlayerSpace()
                 .tabItem { Label("Search", systemImage: "magnifyingglass") }.tag(2)
-            NavigationStack { SettingsView() }.miniPlayerSpace()
+            NavStack { SettingsView() }.miniPlayerSpace()
                 .tabItem { Label("Settings", systemImage: "gear") }.tag(3)
         }
     }
@@ -80,7 +80,7 @@ struct SignInView: View {
             Text("Ice").font(.largeTitle.bold())
             Text("Sign in with your Plex account. Safari will open; approve the sign-in, then come back here.")
                 .multilineTextAlignment(.center)
-                .foregroundStyle(.secondary)
+                .foregroundColor(.secondary)
                 .padding(.horizontal, 32)
             Button {
                 Task { await app.signIn() }
@@ -92,13 +92,13 @@ struct SignInView: View {
                     Text("Sign in with Plex").frame(maxWidth: .infinity)
                 }
             }
-            .buttonStyle(.borderedProminent)
-            .tint(Color.ice)
-            .controlSize(.large)
+            .prominentButton()
+            .iceTint(Color.ice)
+            .largeControl()
             .disabled(app.signInInProgress)
             .padding(.horizontal, 32)
             if let err = app.errorMessage {
-                Text(err).foregroundStyle(.red).font(.footnote)
+                Text(err).foregroundColor(.red).font(.footnote)
             }
             Spacer()
         }
@@ -128,7 +128,7 @@ struct ServerPickerView: View {
                         VStack(alignment: .leading) {
                             Text(server.name).font(.headline)
                             Text(server.owned == true ? "Your server" : "Shared with you")
-                                .font(.caption).foregroundStyle(.secondary)
+                                .font(.caption).foregroundColor(.secondary)
                         }
                         Spacer()
                         if connectingID == server.id { OrangeSpinner(size: 18) }
@@ -137,15 +137,15 @@ struct ServerPickerView: View {
                 .disabled(connectingID != nil)
             }
             if let error {
-                Text(error).foregroundStyle(.red)
+                Text(error).foregroundColor(.red)
             }
             Section {
-                Button("Sign out", role: .destructive) { app.signOut() }
+                Button(action: { app.signOut() }) { Text("Sign out").foregroundColor(.red) }
             }
         }
         .navigationTitle("Choose server")
-        .task { await load() }
-        .refreshable { await load() }
+        .taskCompat { await load() }
+        .refreshableCompat { await load() }
     }
 
     private func load() async {

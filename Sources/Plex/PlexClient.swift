@@ -62,7 +62,7 @@ final class PlexClient {
     }
 
     private func send(_ req: URLRequest) async throws -> Data {
-        let (data, resp) = try await session.data(for: req)
+        let (data, resp) = try await session.dataCompat(for: req)
         if let http = resp as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
             throw PlexError.badResponse(http.statusCode)
         }

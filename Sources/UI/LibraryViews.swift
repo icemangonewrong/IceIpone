@@ -7,20 +7,18 @@ struct LibrariesView: View {
 
     var body: some View {
         List(app.visibleSections) { section in
-            NavigationLink(value: section) {
+            NavigationLink(destination: LibraryGridView(section: section)) {
                 Label(section.title, systemImage: section.type == "show" ? "tv" : "film")
             }
         }
-        .overlay {
+        .overlayCompat {
             if app.visibleSections.isEmpty {
                 Text(app.sections.isEmpty ? "Loading…" : "All libraries are hidden. Change that in Settings.")
-                    .foregroundStyle(.secondary)
+                    .foregroundColor(.secondary)
             }
         }
         .navigationTitle("Libraries")
-        .navigationDestination(for: PlexSection.self) { LibraryGridView(section: $0) }
-        .navigationDestination(for: PlexItem.self) { ItemDetailView(item: $0) }
-        .task { if app.sections.isEmpty { await app.refreshHome() } }
+        .taskCompat { if app.sections.isEmpty { await app.refreshHome() } }
     }
 }
 
@@ -68,7 +66,7 @@ struct LibraryGridView: View {
             }
             .padding()
             if loading { OrangeSpinner().padding() }
-            if let error { Text(error).foregroundStyle(.red) }
+            if let error { Text(error).foregroundColor(.red) }
         }
         .navigationTitle(section.title)
         .toolbar {
@@ -78,11 +76,11 @@ struct LibraryGridView: View {
                 }
                 Toggle("Unwatched only", isOn: $unwatchedOnly)
             } label: {
-                Image(systemName: "line.3.horizontal.decrease.circle")
+                Image(systemName: "line.horizontal.3.decrease.circle")
             }
         }
-        .task(id: "\(sort.rawValue)-\(unwatchedOnly)") { await reload() }
-        .refreshable { await reload() }
+        .taskCompat(id: "\(sort.rawValue)-\(unwatchedOnly)") { await reload() }
+        .refreshableCompat { await reload() }
     }
 
     private func reload() async {

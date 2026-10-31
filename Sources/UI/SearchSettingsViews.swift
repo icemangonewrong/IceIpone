@@ -8,16 +8,15 @@ struct SearchView: View {
 
     var body: some View {
         List(results) { item in
-            NavigationLink(value: item) { SearchRow(item: item) }
+            NavigationLink(destination: ItemDetailView(item: item)) { SearchRow(item: item) }
         }
-        .overlay {
+        .overlayCompat {
             if searching { OrangeSpinner() }
-            else if !query.isEmpty && results.isEmpty { Text("No results").foregroundStyle(.secondary) }
+            else if !query.isEmpty && results.isEmpty { Text("No results").foregroundColor(.secondary) }
         }
         .navigationTitle("Search")
-        .searchable(text: $query, prompt: "Movies and shows")
-        .navigationDestination(for: PlexItem.self) { ItemDetailView(item: $0) }
-        .task(id: query) {
+        .searchCompat(text: $query, prompt: "Movies and shows")
+        .taskCompat(id: query) {
             let text = query.trimmingCharacters(in: .whitespaces)
             guard text.count >= 2 else { results = []; return }
             try? await Task.sleep(nanoseconds: 400_000_000) // wait for typing to pause
@@ -40,7 +39,7 @@ struct SearchRow: View {
                 Text(item.type == "episode" ? (item.title ?? "") : item.displayTitle).font(.headline)
                 Text(item.type == "episode" ? "\(item.displayTitle) · \(item.displaySubtitle ?? "")"
                                             : (item.displaySubtitle ?? (item.type ?? "")))
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.caption).foregroundColor(.secondary)
             }
         }
     }
@@ -51,23 +50,23 @@ struct SettingsView: View {
 
     var body: some View {
         Form {
-            Section("Server") {
-                LabeledContent("Connected to", value: app.server?.name ?? "—")
+            Section(header: Text("Server")) {
+                HStack {
+                    Text("Connected to")
+                    Spacer()
+                    Text(app.server?.name ?? "—").foregroundColor(.secondary)
+                }
                 if let url = app.server?.baseURL {
-                    Text(url).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+                    Text(url).font(.caption).foregroundColor(.secondary).selectableText()
                 }
                 Button("Change server") { app.forgetServer() }
             }
 
-            Section {
+            Section(header: Text("Accent color"), footer: Text("Used for buttons, progress bars, the loading circle and highlights.")) {
                 AccentPicker()
-            } header: {
-                Text("Accent color")
-            } footer: {
-                Text("Used for buttons, progress bars, the loading circle and highlights.")
             }
 
-            Section {
+            Section(header: Text("Libraries"), footer: Text("Hidden libraries are left out of Home, Continue Watching, Libraries and Search.")) {
                 ForEach(app.sections) { section in
                     Toggle(section.title, isOn: Binding(
                         get: { !app.excludedSections.contains(section.key) },
@@ -77,67 +76,47 @@ struct SettingsView: View {
                         }
                     ))
                 }
-            } header: {
-                Text("Libraries")
-            } footer: {
-                Text("Hidden libraries are left out of Home, Continue Watching, Libraries and Search.")
             }
 
-            Section {
+            Section(header: Text("Buffering"), footer: Text("How much video to download ahead so it keeps playing through dead spots. It's saved on the phone's storage (not memory) and deleted when you stop watching. Also keeps loading while paused, so you can pause before a known dead zone and let it fill up.")) {
                 Picker("Load ahead", selection: $app.bufferMinutes) {
                     ForEach(AppState.bufferChoices, id: \.self) { m in
                         Text("\(m) min").tag(m)
                     }
                 }
-            } header: {
-                Text("Buffering")
-            } footer: {
-                Text("How much video to download ahead so it keeps playing through dead spots. It's saved on the phone's storage (not memory) and deleted when you stop watching. Also keeps loading while paused, so you can pause before a known dead zone and let it fill up.")
             }
 
-            Section {
+            Section(header: Text("Player"), footer: Text("When this is off, tapping the video just shows or hides the controls.")) {
                 Toggle("Pause when the screen is tapped", isOn: $app.tapToPause)
-            } header: {
-                Text("Player")
-            } footer: {
-                Text("When this is off, tapping the video just shows or hides the controls.")
             }
 
-            Section {
+            Section(header: Text("Audio delay"), footer: Text("Set from the player's audio delay button. Each Bluetooth device (like your truck) keeps its own setting and it's used automatically when that device is connected.")) {
                 if app.audioDelays.isEmpty {
-                    Text("No devices adjusted yet").foregroundStyle(.secondary)
+                    Text("No devices adjusted yet").foregroundColor(.secondary)
                 }
                 ForEach(app.audioDelays.keys.sorted(), id: \.self) { device in
                     HStack {
                         Text(device)
                         Spacer()
                         let ms = app.audioDelays[device] ?? 0
-                        Text("\(ms > 0 ? "+" : "")\(ms) ms").foregroundStyle(.secondary)
+                        Text("\(ms > 0 ? "+" : "")\(ms) ms").foregroundColor(.secondary)
                         Button("Reset") { app.audioDelays[device] = nil }
-                            .buttonStyle(.borderless)
-                            .tint(Color.ice)
+                            .borderlessButton()
+                            .iceTint(Color.ice)
                     }
                 }
-            } header: {
-                Text("Audio delay")
-            } footer: {
-                Text("Set from the player's audio delay button. Each Bluetooth device (like your truck) keeps its own setting and it's used automatically when that device is connected.")
             }
 
-            Section {
+            Section(header: Text("Car screen"), footer: Text("Applies when video shows on the CarPlay screen. Uses your location to tell when the vehicle is moving.")) {
                 Toggle("Pause video when moving", isOn: $app.pauseWhenMoving)
-            } header: {
-                Text("Car screen")
-            } footer: {
-                Text("Applies when video shows on the CarPlay screen. Uses your location to tell when the vehicle is moving.")
             }
 
             Section {
-                Button("Sign out", role: .destructive) { app.signOut() }
+                Button(action: { app.signOut() }) { Text("Sign out").foregroundColor(.red) }
             }
         }
         .navigationTitle("Settings")
-        .onChange(of: app.excludedSections) {
+        .onChange(of: app.excludedSections) { _ in
             Task { await app.refreshHome() }
         }
     }

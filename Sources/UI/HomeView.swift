@@ -8,14 +8,14 @@ struct HomeView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 28) {
                 if let err = app.errorMessage {
-                    Text(err).foregroundStyle(.red).padding(.horizontal)
+                    Text(err).foregroundColor(.red).padding(.horizontal)
                 }
 
                 if !app.continueWatching.isEmpty {
                     ItemRow(title: "Continue Watching", items: app.continueWatching, wide: true)
                 } else if !app.isLoading {
                     Text("Nothing in progress.")
-                        .foregroundStyle(.secondary)
+                        .foregroundColor(.secondary)
                         .padding(.horizontal)
                 }
 
@@ -27,13 +27,12 @@ struct HomeView: View {
             }
             .padding(.vertical)
         }
-        .overlay {
+        .overlayCompat {
             if app.isLoading && app.continueWatching.isEmpty { OrangeSpinner() }
         }
         .navigationTitle(app.server?.name ?? "Home")
-        .navigationDestination(for: PlexItem.self) { ItemDetailView(item: $0) }
-        .refreshable { await app.refreshHome() }
-        .task {
+        .refreshableCompat { await app.refreshHome() }
+        .taskCompat {
             if app.sections.isEmpty { await app.refreshHome() }
         }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)) { _ in
@@ -69,14 +68,14 @@ struct ItemTile: View {
     let width: CGFloat
 
     var body: some View {
-        NavigationLink(value: item) { tileBody }
-            .buttonStyle(.plain)
+        NavigationLink(destination: ItemDetailView(item: item)) { tileBody }
+            .plainButton()
     }
 
     private var tileBody: some View {
         VStack(alignment: .leading, spacing: 4) {
             PosterImage(path: item.posterPath, width: width)
-                .overlay(alignment: .bottom) {
+                .overlayCompat(alignment: .bottom) {
                     if let p = item.progress {
                         GeometryReader { geo in
                             ZStack(alignment: .leading) {
@@ -87,11 +86,11 @@ struct ItemTile: View {
                         .frame(height: 4)
                     }
                 }
-                .overlay(alignment: .topTrailing) {
+                .overlayCompat(alignment: .topTrailing) {
                     // Only for finished items; a rewatch in progress shows just the progress bar.
                     if item.isWatched && item.progress == nil {
                         Image(systemName: "checkmark.circle.fill")
-                            .foregroundStyle(.white, Color.ice)
+                            .palette(.white, Color.ice)
                             .padding(4)
                     }
                 }
@@ -99,7 +98,7 @@ struct ItemTile: View {
                 .font(.caption.bold())
                 .lineLimit(1)
             if let sub = item.displaySubtitle {
-                Text(sub).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                Text(sub).font(.caption2).foregroundColor(.secondary).lineLimit(1)
             }
         }
         .frame(width: width)
@@ -112,14 +111,10 @@ struct PosterImage: View {
     let width: CGFloat
 
     var body: some View {
-        AsyncImage(url: app.client.imageURL(path, width: Int(width * 2), height: Int(width * 3))) { phase in
-            if let image = phase.image {
-                image.resizable().aspectRatio(contentMode: .fill)
-            } else {
+        RemoteImage(url: app.client.imageURL(path, width: Int(width * 2), height: Int(width * 3))) {
                 ZStack {
                     Rectangle().fill(Color.gray.opacity(0.25))
-                    Image(systemName: "film").foregroundStyle(.secondary)
-                }
+                    Image(systemName: "film").foregroundColor(.secondary)
             }
         }
         .frame(width: width, height: width * 1.5)

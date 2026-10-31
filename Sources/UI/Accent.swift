@@ -54,11 +54,11 @@ struct AccentPicker: View {
                             .overlay(Circle().stroke(Color.white, lineWidth: on ? 3 : 0))
                             .padding(2)
                     }
-                    .buttonStyle(.plain)
+                    .plainButton()
                     .accessibilityLabel(choice.name)
                 }
             }
-            Text(Accent.name(for: accentHex)).font(.footnote).foregroundStyle(.secondary)
+            Text(Accent.name(for: accentHex)).font(.footnote).foregroundColor(.secondary)
         }
         .padding(.vertical, 4)
     }

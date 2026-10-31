@@ -40,7 +40,7 @@ struct PlayableDetailView: View {
                     WatchedButton(item: d, working: $working) { await load() }
 
                     if let s = d.summary, !s.isEmpty {
-                        Text(s).font(.body).foregroundStyle(.white.opacity(0.9))
+                        Text(s).font(.body).foregroundColor(.white.opacity(0.9))
                     }
 
                     CreditsView(item: d)
@@ -53,10 +53,10 @@ struct PlayableDetailView: View {
                                 ScrollView(.horizontal, showsIndicators: false) {
                                     LazyHStack(alignment: .top, spacing: 12) {
                                         ForEach(seasonEpisodes) { ep in
-                                            NavigationLink(value: ep) {
+                                            NavigationLink(destination: ItemDetailView(item: ep)) {
                                                 EpisodeCard(item: ep, isCurrent: ep == d)
                                             }
-                                            .buttonStyle(.plain)
+                                            .plainButton()
                                             .id(ep.id)
                                         }
                                     }
@@ -72,8 +72,8 @@ struct PlayableDetailView: View {
         }
         .ignoresSafeArea(edges: .top)
         .navigationBarTitleDisplayMode(.inline)
-        .task { await load() }
-        .onChange(of: playback.showPlayerUI) { _, shown in
+        .taskCompat { await load() }
+        .onChange(of: playback.showPlayerUI) { shown in
             // Came back from the player: refresh progress / watched state.
             if !shown { Task { await load() } }
         }
@@ -87,16 +87,16 @@ struct PlayableDetailView: View {
             }
             VStack(alignment: .leading, spacing: 6) {
                 if isEpisode {
-                    Text(d.grandparentTitle ?? "").font(.subheadline.weight(.semibold)).foregroundStyle(Color.ice)
+                    Text(d.grandparentTitle ?? "").font(.subheadline.weight(.semibold)).foregroundColor(Color.ice)
                 }
                 Text(d.title ?? "").font(.title.bold()).fixedSize(horizontal: false, vertical: true)
                 if isEpisode, let s = d.parentIndex, let e = d.index {
-                    Text("Season \(s) · Episode \(e)").foregroundStyle(.secondary)
+                    Text("Season \(s) · Episode \(e)").foregroundColor(.secondary)
                 }
                 MetaLine(item: d)
                 if let genres = d.Genre, !genres.isEmpty {
                     Text(genres.prefix(4).map(\.tag).joined(separator: " · "))
-                        .font(.caption).foregroundStyle(.secondary)
+                        .font(.caption).foregroundColor(.secondary)
                 }
             }
         }
@@ -137,7 +137,7 @@ struct ShowDetailView: View {
                             MetaLine(item: d, seasons: seasons.count)
                             if let genres = d.Genre, !genres.isEmpty {
                                 Text(genres.prefix(4).map(\.tag).joined(separator: " · "))
-                                    .font(.caption).foregroundStyle(.secondary)
+                                    .font(.caption).foregroundColor(.secondary)
                             }
                         }
                     }
@@ -155,14 +155,14 @@ struct ShowDetailView: View {
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 4)
                         }
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.large)
+                        .prominentButton()
+                        .largeControl()
                     }
 
                     WatchedButton(item: d, working: $working) { await load() }
 
                     if let s = d.summary, !s.isEmpty {
-                        Text(s).foregroundStyle(.white.opacity(0.9))
+                        Text(s).foregroundColor(.white.opacity(0.9))
                     }
 
                     if !seasons.isEmpty {
@@ -171,23 +171,23 @@ struct ShowDetailView: View {
                             ScrollView(.horizontal, showsIndicators: false) {
                                 LazyHStack(alignment: .top, spacing: 14) {
                                     ForEach(seasons) { season in
-                                        NavigationLink(value: season) {
+                                        NavigationLink(destination: ItemDetailView(item: season)) {
                                             VStack(alignment: .leading, spacing: 4) {
                                                 PosterImage(path: season.thumb ?? d.thumb, width: 105)
-                                                    .overlay(alignment: .topTrailing) {
+                                                    .overlayCompat(alignment: .topTrailing) {
                                                         if season.isWatched {
                                                             Image(systemName: "checkmark.circle.fill")
-                                                                .foregroundStyle(.white, Color.ice).padding(4)
+                                                                .palette(.white, Color.ice).padding(4)
                                                         }
                                                     }
                                                 Text(season.title ?? "Season").font(.caption.bold()).lineLimit(1)
                                                 if let n = season.leafCount {
-                                                    Text("\(n) episodes").font(.caption2).foregroundStyle(.secondary)
+                                                    Text("\(n) episodes").font(.caption2).foregroundColor(.secondary)
                                                 }
                                             }
                                             .frame(width: 105)
                                         }
-                                        .buttonStyle(.plain)
+                                        .plainButton()
                                     }
                                 }
                             }
@@ -202,8 +202,8 @@ struct ShowDetailView: View {
         }
         .ignoresSafeArea(edges: .top)
         .navigationBarTitleDisplayMode(.inline)
-        .task { await load() }
-        .onChange(of: playback.showPlayerUI) { _, shown in
+        .taskCompat { await load() }
+        .onChange(of: playback.showPlayerUI) { shown in
             if !shown { Task { await load() } }
         }
     }
@@ -236,9 +236,9 @@ struct SeasonDetailView: View {
                 HStack(alignment: .bottom, spacing: 14) {
                     PosterImage(path: d.thumb, width: 90)
                     VStack(alignment: .leading, spacing: 4) {
-                        Text(d.parentTitle ?? "").font(.subheadline.weight(.semibold)).foregroundStyle(Color.ice)
+                        Text(d.parentTitle ?? "").font(.subheadline.weight(.semibold)).foregroundColor(Color.ice)
                         Text(d.title ?? "Season").font(.title2.bold())
-                        Text("\(episodes.count) episodes").foregroundStyle(.secondary)
+                        Text("\(episodes.count) episodes").foregroundColor(.secondary)
                     }
                 }
                 .listRowBackground(Color.clear)
@@ -248,17 +248,17 @@ struct SeasonDetailView: View {
 
             Section {
                 ForEach(episodes) { ep in
-                    NavigationLink(value: ep) { EpisodeRow(item: ep) }
+                    NavigationLink(destination: ItemDetailView(item: ep)) { EpisodeRow(item: ep) }
                 }
             }
         }
-        .listStyle(.plain)
-        .overlay { if loading && episodes.isEmpty { OrangeSpinner() } }
+        .listStyle(PlainListStyle())
+        .overlayCompat { if loading && episodes.isEmpty { OrangeSpinner() } }
         .navigationTitle(d.title ?? "Season")
         .navigationBarTitleDisplayMode(.inline)
-        .task { await load() }
-        .refreshable { await load() }
-        .onChange(of: playback.showPlayerUI) { _, shown in
+        .taskCompat { await load() }
+        .refreshableCompat { await load() }
+        .onChange(of: playback.showPlayerUI) { shown in
             if !shown { Task { await load() } }
         }
     }
@@ -279,18 +279,14 @@ private struct Backdrop: View {
     let path: String?
 
     var body: some View {
-        AsyncImage(url: app.client.imageURL(path, width: 1280, height: 720)) { phase in
-            if let image = phase.image {
-                image.resizable().aspectRatio(contentMode: .fill)
-            } else {
+        RemoteImage(url: app.client.imageURL(path, width: 1280, height: 720)) {
                 Rectangle().fill(Color.white.opacity(0.06))
             }
-        }
         .frame(maxWidth: .infinity)
         .frame(height: 250)
         .clipped()
-        .overlay {
-            LinearGradient(colors: [.black.opacity(0.35), .clear, .black],
+        .overlayCompat {
+            LinearGradient(gradient: Gradient(colors: [.black.opacity(0.35), .clear, .black]),
                            startPoint: .top, endPoint: .bottom)
         }
     }
@@ -315,7 +311,7 @@ private struct MetaLine: View {
     }
 
     var body: some View {
-        Text(text).font(.subheadline).foregroundStyle(.secondary)
+        Text(text).font(.subheadline).foregroundColor(.secondary)
     }
 }
 
@@ -329,10 +325,10 @@ private struct PlayButtons: View {
         VStack(alignment: .leading, spacing: 10) {
             if inProgress, let p = item.progress {
                 HStack(spacing: 10) {
-                    ProgressView(value: p).tint(Color.ice)
+                    ProgressView(value: p).iceTint(Color.ice)
                     if let dur = item.duration, let off = item.viewOffset {
                         Text("\(runtimeString(max(dur - off, 0))) left")
-                            .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                            .font(.caption.monospacedDigit()).foregroundColor(.secondary)
                     }
                 }
             }
@@ -345,7 +341,7 @@ private struct PlayButtons: View {
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 4)
                 }
-                .buttonStyle(.borderedProminent)
+                .prominentButton()
 
                 if inProgress {
                     Button {
@@ -355,10 +351,10 @@ private struct PlayButtons: View {
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 4)
                     }
-                    .buttonStyle(.bordered)
+                    .borderedButton()
                 }
             }
-            .controlSize(.large)
+            .largeControl()
         }
     }
 }
@@ -389,8 +385,8 @@ private struct WatchedButton: View {
             }
             .font(.subheadline.weight(.semibold))
         }
-        .buttonStyle(.bordered)
-        .tint(watched ? Color.ice : .gray)
+        .borderedButton()
+        .iceTint(watched ? Color.ice : .gray)
         .disabled(working)
     }
 }
@@ -413,7 +409,7 @@ private struct CreditsView: View {
                         HStack(alignment: .firstTextBaseline) {
                             Text(r.tag).font(.subheadline.weight(.medium))
                             if let role = r.role, !role.isEmpty {
-                                Text(role).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+                                Text(role).font(.subheadline).foregroundColor(.secondary).lineLimit(1)
                             }
                             Spacer()
                         }
@@ -451,7 +447,7 @@ private struct FileInfoView: View {
         let text = values.compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
         if !text.isEmpty {
             GridRow {
-                Text(label).foregroundStyle(.secondary)
+                Text(label).foregroundColor(.secondary)
                 Text(text)
             }
         }
@@ -485,21 +481,20 @@ private struct EpisodeCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            AsyncImage(url: app.client.imageURL(item.thumb, width: 400, height: 225)) { phase in
-                if let image = phase.image { image.resizable().aspectRatio(contentMode: .fill) }
-                else { Rectangle().fill(Color.white.opacity(0.08)) }
+            RemoteImage(url: app.client.imageURL(item.thumb, width: 400, height: 225)) {
+                Rectangle().fill(Color.white.opacity(0.08))
             }
             .frame(width: 170, height: 96)
             .clipShape(RoundedRectangle(cornerRadius: 8))
             .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.ice, lineWidth: isCurrent ? 2 : 0))
-            .overlay(alignment: .bottom) {
+            .overlayCompat(alignment: .bottom) {
                 if let p = item.progress {
-                    ProgressView(value: p).tint(Color.ice).padding(.horizontal, 6).padding(.bottom, 4)
+                    ProgressView(value: p).iceTint(Color.ice).padding(.horizontal, 6).padding(.bottom, 4)
                 }
             }
-            .overlay(alignment: .topTrailing) {
+            .overlayCompat(alignment: .topTrailing) {
                 if item.isWatched && item.progress == nil {
-                    Image(systemName: "checkmark.circle.fill").foregroundStyle(.white, Color.ice).padding(4)
+                    Image(systemName: "checkmark.circle.fill").palette(.white, Color.ice).padding(4)
                 }
             }
             Text("\(item.index.map { "\($0). " } ?? "")\(item.title ?? "")")
@@ -516,15 +511,14 @@ struct EpisodeRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            AsyncImage(url: app.client.imageURL(item.thumb, width: 320, height: 180)) { phase in
-                if let image = phase.image { image.resizable().aspectRatio(contentMode: .fill) }
-                else { Rectangle().fill(Color.white.opacity(0.08)) }
+            RemoteImage(url: app.client.imageURL(item.thumb, width: 320, height: 180)) {
+                Rectangle().fill(Color.white.opacity(0.08))
             }
             .frame(width: 120, height: 68)
             .clipShape(RoundedRectangle(cornerRadius: 6))
-            .overlay(alignment: .bottom) {
+            .overlayCompat(alignment: .bottom) {
                 if let p = item.progress {
-                    ProgressView(value: p).tint(Color.ice).padding(.horizontal, 4).padding(.bottom, 3)
+                    ProgressView(value: p).iceTint(Color.ice).padding(.horizontal, 4).padding(.bottom, 3)
                 }
             }
 
@@ -532,12 +526,12 @@ struct EpisodeRow: View {
                 Text("\(item.index.map { "\($0). " } ?? "")\(item.title ?? "Episode")")
                     .font(.subheadline.weight(.semibold)).lineLimit(2)
                 if let d = item.duration {
-                    Text(runtimeString(d)).font(.caption).foregroundStyle(.secondary)
+                    Text(runtimeString(d)).font(.caption).foregroundColor(.secondary)
                 }
             }
             Spacer()
             if item.isWatched && item.progress == nil {
-                Image(systemName: "checkmark.circle.fill").foregroundStyle(Color.ice)
+                Image(systemName: "checkmark.circle.fill").foregroundColor(Color.ice)
             }
         }
         .contentShape(Rectangle())

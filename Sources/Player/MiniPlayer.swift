@@ -24,14 +24,14 @@ struct MiniPlayer: View {
                                 Text(item.displayTitle).font(.subheadline.weight(.semibold)).lineLimit(1)
                                 Text(item.type == "episode" ? (item.displaySubtitle ?? "") : timeString(playback.currentTime)
                                      + " / " + timeString(playback.duration))
-                                    .font(.caption).foregroundStyle(.white.opacity(0.65)).lineLimit(1)
+                                    .font(.caption).foregroundColor(.white.opacity(0.65)).lineLimit(1)
                             }
                         }
                         Spacer(minLength: 0)
                     }
                     .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
+                .plainButton()
 
                 Button { playback.togglePlayPause() } label: {
                     Image(systemName: playback.isPlaying ? "pause.fill" : "play.fill")
@@ -59,13 +59,13 @@ struct MiniPlayer: View {
             }
             .frame(height: 3)
         }
-        .foregroundStyle(.white)
-        .background(Color(white: 0.11), in: RoundedRectangle(cornerRadius: 12))
+        .foregroundColor(.white)
+        .bg(Color(white: 0.11), RoundedRectangle(cornerRadius: 12))
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .shadow(color: .black.opacity(0.5), radius: 8, y: 2)
-        .task {
+        .taskCompat {
             for delay in [0.4, 0.9, 1.6] {
-                try? await Task.sleep(for: .seconds(delay))
+                try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
                 attachKey += 1
             }
         }
@@ -76,7 +76,7 @@ struct MiniPlayer: View {
             // The video is on the car screen; don't pull it back to the phone.
             ZStack {
                 Color.black
-                Image(systemName: "car.fill").foregroundStyle(Color.ice)
+                Image(systemName: "car.fill").foregroundColor(Color.ice)
             }
         } else {
             ZStack {
@@ -96,10 +96,6 @@ private struct MiniPlayerSpace: ViewModifier {
     @EnvironmentObject var playback: PlaybackManager
 
     func body(content: Content) -> some View {
-        content.safeAreaInset(edge: .bottom, spacing: 0) {
-            if playback.isActive && !playback.showPlayerUI {
-                Color.clear.frame(height: MiniPlayer.height + 26)
-            }
-        }
+        content.bottomInset(playback.isActive && !playback.showPlayerUI ? MiniPlayer.height + 26 : 0)
     }
 }

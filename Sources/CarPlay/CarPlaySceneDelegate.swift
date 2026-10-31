@@ -176,7 +176,7 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
         // Load the poster in the background.
         if let url = app.client.imageURL(item.posterPath, width: 120, height: 180) {
             Task.detached {
-                if let result = try? await URLSession.shared.data(from: url),
+                if let result = try? await URLSession.shared.dataCompat(from: url),
                    let img = UIImage(data: result.0) {
                     await MainActor.run { row.setImage(img) }
                 }

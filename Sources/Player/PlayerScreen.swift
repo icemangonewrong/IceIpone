@@ -11,7 +11,7 @@ struct PlayerScreen: View {
 
             if playback.carScreenActive {
                 CarRemoteView()
-                    .overlay(alignment: .topLeading) { CloseButton(minimizes: false).padding() }
+                    .overlayCompat(alignment: .topLeading) { CloseButton(minimizes: false).padding() }
             } else if playback.isActive {
                 PlayerView()
             } else if let err = playback.errorMessage {
@@ -63,7 +63,7 @@ private struct PlayerView: View {
                             Text("No signal — will pick up where it left off")
                                 .font(.callout.weight(.semibold))
                                 .padding(.horizontal, 14).padding(.vertical, 8)
-                                .background(.black.opacity(0.6), in: Capsule())
+                                .bg(.black.opacity(0.6), Capsule())
                         }
                     } else if (playback.isBuffering || playback.switching) && !scrubbing {
                         OrangeSpinner(size: 56)
@@ -75,16 +75,16 @@ private struct PlayerView: View {
                 VStack(spacing: 8) {
                     if playback.offline && !playback.waitingForSignal {
                         Label("No signal · playing from \(timeString(playback.bufferedAhead)) saved",
-                              systemImage: "antenna.radiowaves.left.and.right.slash")
+                              systemImage: "wifi.slash")
                             .font(.caption.weight(.semibold))
                             .padding(.horizontal, 12).padding(.vertical, 6)
-                            .background(.black.opacity(0.65), in: Capsule())
+                            .bg(.black.opacity(0.65), Capsule())
                     }
                     if let toast = playback.toast {
                         Text(toast)
                             .font(.caption.weight(.semibold))
                             .padding(.horizontal, 12).padding(.vertical, 6)
-                            .background(.black.opacity(0.75), in: Capsule())
+                            .bg(.black.opacity(0.75), Capsule())
                     }
                 }
                 .padding(.top, 14)
@@ -102,7 +102,7 @@ private struct PlayerView: View {
                             Text(m.isIntro ? "Skip Intro" : "Skip Credits")
                                 .font(.subheadline.weight(.bold))
                                 .padding(.horizontal, 20).padding(.vertical, 11)
-                                .background(.black.opacity(0.75), in: RoundedRectangle(cornerRadius: 8))
+                                .bg(.black.opacity(0.75), RoundedRectangle(cornerRadius: 8))
                                 .overlay(RoundedRectangle(cornerRadius: 8).stroke(.white.opacity(0.85), lineWidth: 1.5))
                         }
                     }
@@ -127,9 +127,9 @@ private struct PlayerView: View {
                 }
             }
         }
-        .foregroundStyle(.white)
+        .foregroundColor(.white)
         .onAppear { scheduleHide() }
-        .onChange(of: playback.isPlaying) { scheduleHide() }
+        .onChange(of: playback.isPlaying) { _ in scheduleHide() }
         .sheet(isPresented: $showAudioDelay, onDismiss: scheduleHide) {
             AdjustSheet(title: "Audio delay",
                         note: "For \(playback.audioOutputName). Saved for this device and used automatically whenever it's connected.",
@@ -137,7 +137,7 @@ private struct PlayerView: View {
                         minusLabel: "Sound earlier", plusLabel: "Sound later",
                         describe: { $0 < 0 ? "Sound plays earlier" : ($0 > 0 ? "Sound plays later" : "No adjustment") },
                         onChange: { playback.setAudioDelay($0) })
-                .presentationDetents([.height(330)])
+                .sheetHeight(330)
         }
         .sheet(isPresented: $showSubtitleTiming, onDismiss: scheduleHide) {
             AdjustSheet(title: "Subtitle timing", note: "For this video.",
@@ -145,7 +145,7 @@ private struct PlayerView: View {
                         minusLabel: "Earlier", plusLabel: "Later",
                         describe: { $0 < 0 ? "Subtitles show earlier" : ($0 > 0 ? "Subtitles show later" : "No adjustment") },
                         onChange: { playback.setSubtitleDelay($0) })
-                .presentationDetents([.height(300)])
+                .sheetHeight(300)
         }
     }
 
@@ -202,13 +202,13 @@ private struct PlayerView: View {
             if let item = playback.current {
                 Text(item.displayTitle).font(.headline).lineLimit(1)
                 Text(item.type == "episode" ? (item.displaySubtitle ?? "") : (item.year.map(String.init) ?? ""))
-                    .font(.caption).foregroundStyle(.white.opacity(0.65)).lineLimit(1)
+                    .font(.caption).foregroundColor(.white.opacity(0.65)).lineLimit(1)
             }
             let shown = scrubbing ? scrubValue : playback.currentTime
             Text("\(timeString(shown)) / \(timeString(playback.duration))"
                  + (playback.bufferedAhead > 1 ? "  ·  \(timeString(playback.bufferedAhead)) loaded" : ""))
                 .font(.caption.monospacedDigit().weight(.semibold))
-                .foregroundStyle(.white.opacity(0.65))
+                .foregroundColor(.white.opacity(0.65))
                 .lineLimit(1)
         }
         .frame(maxWidth: 260, alignment: .leading)
@@ -231,7 +231,7 @@ private struct PlayerView: View {
                 Image(systemName: playback.isPlaying ? "pause.fill" : "play.fill")
                     .font(.system(size: 24, weight: .bold))
                     .frame(width: 54, height: 54)
-                    .background(.white.opacity(0.15), in: Circle())
+                    .bg(.white.opacity(0.15), Circle())
             }
             Spacer().frame(width: 16)
             barButton("goforward.10", size: 26) { playback.skip(10) }
@@ -255,7 +255,7 @@ private struct PlayerView: View {
             } label: {
                 Image(systemName: "waveform")
                     .font(.system(size: 19, weight: .semibold))
-                    .overlay(alignment: .bottomTrailing) {
+                    .overlayCompat(alignment: .bottomTrailing) {
                         Image(systemName: "clock.fill")
                             .font(.system(size: 9, weight: .bold))
                             .offset(x: 5, y: 4)
@@ -309,21 +309,21 @@ private struct UpNextCard: View {
         VStack(alignment: .leading, spacing: 4) {
             Text("UP NEXT · PLAYING IN \(seconds)")
                 .font(.caption.weight(.bold))
-                .foregroundStyle(Color.ice)
+                .foregroundColor(Color.ice)
             Text(next.title ?? "Next episode").font(.headline).lineLimit(1)
-            Text(episodeCode(next)).font(.caption).foregroundStyle(.white.opacity(0.65))
+            Text(episodeCode(next)).font(.caption).foregroundColor(.white.opacity(0.65))
             HStack(spacing: 10) {
                 Button {
                     playback.playUpNextNow()
                 } label: {
                     Text("Play now").font(.subheadline.weight(.bold)).frame(maxWidth: .infinity)
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(Color.ice)
-                .foregroundStyle(.black)
+                .prominentButton()
+                .iceTint(Color.ice)
+                .foregroundColor(.black)
                 Button("Cancel") { playback.cancelUpNext() }
-                    .buttonStyle(.bordered)
-                    .tint(.white)
+                    .borderedButton()
+                    .iceTint(.white)
             }
             .padding(.top, 6)
         }
@@ -348,10 +348,10 @@ private struct AdjustSheet: View {
     var body: some View {
         VStack(spacing: 14) {
             Text(title).font(.title3.bold())
-            Text(note).font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
+            Text(note).font(.footnote).foregroundColor(.secondary).multilineTextAlignment(.center)
             Text(value == 0 ? "0 ms" : "\(value > 0 ? "+" : "")\(value) ms")
                 .font(.system(size: 34, weight: .bold).monospacedDigit())
-            Text(describe(value)).font(.subheadline).foregroundStyle(.secondary)
+            Text(describe(value)).font(.subheadline).foregroundColor(.secondary)
             HStack(spacing: 12) {
                 Button { set(value - step) } label: {
                     Label(minusLabel, systemImage: "chevron.left").frame(maxWidth: .infinity)
@@ -362,11 +362,11 @@ private struct AdjustSheet: View {
                         .frame(maxWidth: .infinity)
                 }
             }
-            .buttonStyle(.bordered)
-            .controlSize(.large)
+            .borderedButton()
+            .largeControl()
             Button("Reset to 0") { set(0) }
-                .buttonStyle(.borderless)
-                .tint(Color.ice)
+                .borderlessButton()
+                .iceTint(Color.ice)
         }
         .padding(24)
         .preferredColorScheme(.dark)
@@ -403,9 +403,9 @@ private struct CloseButton: View {
             Image(systemName: minimizes && playback.isActive ? "chevron.down" : "xmark")
                 .font(.system(size: 18, weight: .bold))
                 .frame(width: 40, height: 40)
-                .background(.ultraThinMaterial, in: Circle())
+                .frosted(Circle())
         }
-        .foregroundStyle(.white)
+        .foregroundColor(.white)
     }
 }
 
@@ -418,11 +418,11 @@ private struct ErrorPanel: View {
             Image(systemName: "exclamationmark.triangle").font(.largeTitle)
             Text(message).multilineTextAlignment(.center)
             Button("Close") { Task { await playback.stop() } }
-                .buttonStyle(.borderedProminent).tint(Color.ice)
+                .prominentButton().iceTint(Color.ice)
         }
-        .foregroundStyle(.white)
+        .foregroundColor(.white)
         .padding(24)
-        .background(.black.opacity(0.7), in: RoundedRectangle(cornerRadius: 16))
+        .bg(.black.opacity(0.7), RoundedRectangle(cornerRadius: 16))
         .padding()
     }
 }
@@ -463,7 +463,7 @@ private struct TracksMenu: View {
         Menu {
             let audio = playback.audioTracks
             if !audio.isEmpty {
-                Section("Audio") {
+                Section(header: Text("Audio")) {
                     ForEach(audio) { t in
                         Button {
                             playback.selectAudioTrack(t.id)
@@ -476,7 +476,7 @@ private struct TracksMenu: View {
             }
             let subs = playback.subtitleTracks
             if !subs.isEmpty {
-                Section("Subtitles") {
+                Section(header: Text("Subtitles")) {
                     ForEach(subs) { t in
                         Button {
                             playback.selectSubtitleTrack(t.id)
@@ -499,11 +499,11 @@ private struct TracksMenu: View {
                       systemImage: "clock")
             }
         } label: {
-            Image(systemName: "captions.bubble")
+            Image(systemName: "text.bubble")
                 .font(.system(size: 19, weight: .semibold))
                 .frame(width: 44, height: 44)
         }
-        .foregroundStyle(.white)
+        .foregroundColor(.white)
         .simultaneousGesture(TapGesture().onEnded { onOpen() })
     }
 }
@@ -516,30 +516,30 @@ struct CarRemoteView: View {
 
     var body: some View {
         VStack(spacing: 24) {
-            Image(systemName: "car.fill").font(.system(size: 44)).foregroundStyle(Color.ice)
+            Image(systemName: "car.fill").font(.system(size: 44)).foregroundColor(Color.ice)
             Text("Playing on car screen").font(.headline)
             if let item = playback.current {
                 Text(item.type == "episode" ? "\(item.displayTitle) · \(item.displaySubtitle ?? "")" : item.displayTitle)
                     .multilineTextAlignment(.center)
-                    .foregroundStyle(.secondary)
+                    .foregroundColor(.secondary)
             }
             if playback.heldForMotion {
                 Label("Paused while moving", systemImage: "hand.raised.fill")
-                    .foregroundStyle(.yellow)
+                    .foregroundColor(.yellow)
             }
 
             if playback.duration > 0 {
                 Slider(value: Binding(get: { playback.currentTime },
                                       set: { playback.seek(to: $0) }),
                        in: 0...playback.duration)
-                    .tint(Color.ice)
+                    .iceTint(Color.ice)
                 HStack {
                     Text(timeString(playback.currentTime))
                     Spacer()
                     Text("−" + timeString(playback.duration - playback.currentTime))
                 }
                 .font(.caption.monospacedDigit())
-                .foregroundStyle(.secondary)
+                .foregroundColor(.secondary)
             }
 
             HStack(spacing: 44) {
@@ -551,9 +551,9 @@ struct CarRemoteView: View {
                 Button { playback.skip(10) } label: { Image(systemName: "goforward.10") }
             }
             .font(.largeTitle)
-            .foregroundStyle(.white)
+            .foregroundColor(.white)
         }
-        .foregroundStyle(.white)
+        .foregroundColor(.white)
         .padding(32)
     }
 }
