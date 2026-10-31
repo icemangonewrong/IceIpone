@@ -47,9 +47,15 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
         // and comes back when the screen is tapped (CarPlay handles that).
         map.automaticallyHidesNavigationBar = false
         let browse = CPBarButton(title: "Browse") { [weak self] _ in self?.showBrowse() }
-        let back10 = CPBarButton(image: Self.symbol("gobackward.10")) { [weak self] _ in self?.playback.skip(-10) }
-        let playPauseBar = CPBarButton(image: Self.symbol("play.fill")) { [weak self] _ in self?.playback.togglePlayPause() }
-        let fwd10 = CPBarButton(image: Self.symbol("goforward.10")) { [weak self] _ in self?.playback.skip(10) }
+        let back10 = CPBarButton(image: Self.symbol("gobackward.10")) { [weak self] _ in
+            self?.playback.skip(-10); self?.carVideo?.flashStrip()
+        }
+        let playPauseBar = CPBarButton(image: Self.symbol("play.fill")) { [weak self] _ in
+            self?.playback.togglePlayPause(); self?.carVideo?.flashStrip()
+        }
+        let fwd10 = CPBarButton(image: Self.symbol("goforward.10")) { [weak self] _ in
+            self?.playback.skip(10); self?.carVideo?.flashStrip()
+        }
         idleBar = ([browse], [])
         playingBar = ([browse, back10], [playPauseBar, fwd10])
         playPauseBarButton = playPauseBar
@@ -91,7 +97,20 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
                 let bar = active ? self.playingBar : self.idleBar
                 map.leadingNavigationBarButtons = bar.0
                 map.trailingNavigationBarButtons = bar.1
-                if !active { map.automaticallyHidesNavigationBar = false }
+                if active {
+                    // Something started (here or on the phone): show the video.
+                    if (self.interfaceController?.templates.count ?? 0) > 1 {
+                        self.interfaceController?.popToRootTemplate(animated: true, completion: nil)
+                    }
+                    self.carVideo?.flashStrip()
+                } else {
+                    map.automaticallyHidesNavigationBar = false
+                    // Nothing playing: go straight to Browse.
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
+                        guard let self, !self.playback.isActive else { return }
+                        self.showBrowse(automatic: true)
+                    }
+                }
             }
             .store(in: &cancellables)
     }
@@ -110,7 +129,7 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
 
     // MARK: - Browsing
 
-    private func showBrowse() {
+    private func showBrowse(automatic: Bool = false) {
         Task {
             if app.sections.isEmpty { await app.refreshHome() }
             else { await app.refreshContinueWatching() }
@@ -166,8 +185,10 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
                 sections.append(CPListSection(items: [empty]))
             }
 
+            // Opened automatically: skip if something else is already on screen or playback started meanwhile.
+            if automatic && ((interfaceController?.templates.count ?? 0) > 1 || playback.isActive) { return }
             let list = CPListTemplate(title: "Ice", sections: sections)
-            interfaceController?.pushTemplate(list, animated: true, completion: nil)
+            interfaceController?.pushTemplate(list, animated: !automatic, completion: nil)
         }
     }
 
@@ -341,11 +362,24 @@ final class CarVideoViewController: UIViewController {
     private let stripTitle = UILabel()
     private let stripTime = UILabel()
     private let stripProgress = UIProgressView(progressViewStyle: .default)
-    private var barShown = true
+    private var barShown = false
+    private var hideStrip: DispatchWorkItem?
 
     func setBarShown(_ shown: Bool) {
-        barShown = shown
+        if shown { flashStrip() } else { barShown = false; updateStrip(animated: true) }
+    }
+
+    /// Show the title/time strip for a few seconds (CarPlay doesn't reliably say when its top bar hides).
+    func flashStrip() {
+        barShown = true
         updateStrip(animated: true)
+        hideStrip?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            self?.barShown = false
+            self?.updateStrip(animated: true)
+        }
+        hideStrip = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4, execute: work)
     }
 
     private func updateStrip(animated: Bool) {
@@ -431,6 +465,10 @@ final class CarVideoViewController: UIViewController {
 
         buildStrip()
         let pb = PlaybackManager.shared
+        pb.$isPlaying.removeDuplicates().dropFirst()
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.flashStrip() }
+            .store(in: &cancellables)
         pb.$currentTime.combineLatest(pb.$isPlaying, pb.$isActive)
             .throttle(for: .milliseconds(500), scheduler: RunLoop.main, latest: true)
             .sink { [weak self] _ in self?.updateStrip(animated: true) }
