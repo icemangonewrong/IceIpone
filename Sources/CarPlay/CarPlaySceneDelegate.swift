@@ -131,11 +131,22 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
 
     // MARK: - Browsing
 
+    /// Opens Browse right away with what's already loaded, then refreshes it in place from Plex.
     private func showBrowse(automatic: Bool = false) {
+        // Opened automatically: skip if something else is already on screen or playback has started.
+        if automatic && ((interfaceController?.templates.count ?? 0) > 1 || playback.isActive) { return }
+        let haveData = !app.sections.isEmpty
+        let list = CPListTemplate(title: "Ice", sections: haveData ? browseSections() : [
+            CPListSection(items: [CPListItem(text: "Loading…", detailText: nil)]),
+        ])
+        push(list, animated: !automatic)
         Task {
-            if app.sections.isEmpty { await app.refreshHome() }
-            else { await app.refreshContinueWatching() }
+            if haveData { await app.refreshContinueWatching() } else { await app.refreshHome() }
+            list.updateSections(browseSections())
+        }
+    }
 
+    private func browseSections() -> [CPListSection] {
             var sections: [CPListSection] = []
 
             if playback.isActive, let cur = playback.current {
@@ -187,11 +198,7 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
                 sections.append(CPListSection(items: [empty]))
             }
 
-            // Opened automatically: skip if something else is already on screen or playback started meanwhile.
-            if automatic && ((interfaceController?.templates.count ?? 0) > 1 || playback.isActive) { return }
-            let list = CPListTemplate(title: "Ice", sections: sections)
-            push(list, animated: !automatic)
-        }
+        return sections
     }
 
     private func showLibrary(_ section: PlexSection) {
