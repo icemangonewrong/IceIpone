@@ -103,9 +103,7 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
                 map.trailingNavigationBarButtons = bar.1
                 if active {
                     // Something started (here or on the phone): show the video.
-                    if (self.interfaceController?.templates.count ?? 0) > 1 {
-                        self.interfaceController?.popToRootTemplate(animated: true, completion: nil)
-                    }
+                    self.goToVideo()
                     self.carVideo?.flashStrip()
                 } else {
                     map.automaticallyHidesNavigationBar = false
@@ -147,7 +145,7 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
                                        image: Self.symbol("forward.end.fill"))
                     r.handler = { [weak self] _, done in
                         self?.playback.playNext()
-                        self?.interfaceController?.popToRootTemplate(animated: true, completion: nil)
+                        self?.goToVideo()
                         done()
                     }
                     rows.append(r)
@@ -156,7 +154,7 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
                                       image: Self.symbol("stop.fill"))
                 stop.handler = { [weak self] _, done in
                     Task { await self?.playback.stop() }
-                    self?.interfaceController?.popToRootTemplate(animated: true, completion: nil)
+                    self?.goToVideo()
                     done()
                 }
                 rows.append(stop)
@@ -192,7 +190,7 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
             // Opened automatically: skip if something else is already on screen or playback started meanwhile.
             if automatic && ((interfaceController?.templates.count ?? 0) > 1 || playback.isActive) { return }
             let list = CPListTemplate(title: "Ice", sections: sections)
-            interfaceController?.pushTemplate(list, animated: !automatic, completion: nil)
+            push(list, animated: !automatic)
         }
     }
 
@@ -216,7 +214,7 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
                                               header: "A–Z", sectionIndexTitle: nil))
             }
             let list = CPListTemplate(title: section.title, sections: sections)
-            interfaceController?.pushTemplate(list, animated: true, completion: nil)
+            push(list, animated: true)
         }
     }
 
@@ -235,7 +233,7 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
             }
             rows.append(contentsOf: kids.map { makeItemRow($0) })
             let list = CPListTemplate(title: item.title ?? "", sections: [CPListSection(items: rows)])
-            interfaceController?.pushTemplate(list, animated: true, completion: nil)
+            push(list, animated: true)
         }
     }
 
@@ -329,10 +327,37 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
         return row
     }
 
+    // MARK: - Screen changes (one at a time: CarPlay crashes the app if two overlap)
+
+    private var navigating = false
+
+    /// Back to the video screen (the root), unless we're already there or a change is under way.
+    private func goToVideo() {
+        guard let ic = interfaceController, ic.templates.count > 1 else { return }
+        if navigating {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in self?.goToVideo() }
+            return
+        }
+        navigating = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in self?.navigating = false }
+        ic.popToRootTemplate(animated: true) { [weak self] _, _ in self?.navigating = false }
+    }
+
+    private func push(_ template: CPTemplate, animated: Bool) {
+        guard let ic = interfaceController else { return }
+        if navigating {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in self?.push(template, animated: animated) }
+            return
+        }
+        navigating = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in self?.navigating = false }
+        ic.pushTemplate(template, animated: animated) { [weak self] _, _ in self?.navigating = false }
+    }
+
     private func startPlayback(_ item: PlexItem) {
         Task {
+            goToVideo()
             await playback.play(item)
-            interfaceController?.popToRootTemplate(animated: true, completion: nil)
         }
     }
 }

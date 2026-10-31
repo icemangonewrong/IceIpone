@@ -47,9 +47,17 @@ struct SearchRow: View {
 
 struct SettingsView: View {
     @EnvironmentObject var app: AppState
+    @State private var crashNote: String? = CrashNote.last
 
     var body: some View {
         Form {
+            if let crash = crashNote {
+                Section(header: Text("Last crash"), footer: Text("Saved when Ice last crashed. Send a screenshot of this to fix it.")) {
+                    Text(crash).font(.system(size: 11, design: .monospaced)).lineLimit(14).selectableText()
+                    Button(action: { CrashNote.clear(); crashNote = nil }) { Text("Clear").foregroundColor(.red) }
+                }
+            }
+
             Section(header: Text("Server")) {
                 HStack {
                     Text("Connected to")
