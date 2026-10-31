@@ -429,7 +429,7 @@ private struct FileInfoView: View {
         if let m = item.Media?.first {
             VStack(alignment: .leading, spacing: 8) {
                 Text("File").font(.headline)
-                Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 6) {
+                VStack(alignment: .leading, spacing: 6) {
                     row("Video", [resolution(m), m.videoDynamicRange.flatMap { $0 == "SDR" ? nil : $0 },
                                   m.videoCodec?.uppercased()])
                     row("Audio", [m.audioCodec?.uppercased(), m.audioChannels.map { channels($0) }])
@@ -446,8 +446,8 @@ private struct FileInfoView: View {
     private func row(_ label: String, _ values: [String?]) -> some View {
         let text = values.compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
         if !text.isEmpty {
-            GridRow {
-                Text(label).foregroundColor(.secondary)
+            HStack(alignment: .firstTextBaseline, spacing: 16) {
+                Text(label).foregroundColor(.secondary).frame(width: 44, alignment: .leading)
                 Text(text)
             }
         }

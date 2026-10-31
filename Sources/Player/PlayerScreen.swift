@@ -220,7 +220,7 @@ private struct PlayerView: View {
         return HStack(spacing: 0) {
             barButton("backward.end.fill", size: 20) { playback.previous() }
             Spacer().frame(width: 20)
-            Divider().frame(width: 1.5, height: 30).overlay(.white.opacity(0.25))
+            Rectangle().fill(Color.white.opacity(0.25)).frame(width: 1.5, height: 30)
             Spacer().frame(width: 24)
             barButton("gobackward.10", size: 26) { playback.skip(-10) }
             Spacer().frame(width: 16)
@@ -236,7 +236,7 @@ private struct PlayerView: View {
             Spacer().frame(width: 16)
             barButton("goforward.10", size: 26) { playback.skip(10) }
             Spacer().frame(width: 24)
-            Divider().frame(width: 1.5, height: 30).overlay(.white.opacity(0.25))
+            Rectangle().fill(Color.white.opacity(0.25)).frame(width: 1.5, height: 30)
                 .opacity(isEpisode ? 1 : 0)
             Spacer().frame(width: 20)
             barButton("forward.end.fill", size: 20) { playback.playNext() }
@@ -329,7 +329,7 @@ private struct UpNextCard: View {
         }
         .padding(16)
         .frame(width: 300)
-        .background(Color(red: 0.07, green: 0.07, blue: 0.09).opacity(0.95), in: RoundedRectangle(cornerRadius: 14))
+        .bg(Color(red: 0.07, green: 0.07, blue: 0.09).opacity(0.95), RoundedRectangle(cornerRadius: 14))
         .overlay(RoundedRectangle(cornerRadius: 14).stroke(.white.opacity(0.15)))
     }
 }
