@@ -21,7 +21,7 @@ targets:
       properties:
         CFBundleDisplayName: Ice
         CFBundleShortVersionString: "3.4"
-        CFBundleVersion: "17"
+        CFBundleVersion: "18"
         ITSAppUsesNonExemptEncryption: false
         UILaunchScreen: {}
         UIUserInterfaceStyle: Dark

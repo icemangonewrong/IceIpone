@@ -46,7 +46,11 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
         // Top bar: always up when nothing is playing or it's paused; hides itself while playing
         // and comes back when the screen is tapped (CarPlay handles that).
         map.automaticallyHidesNavigationBar = false
-        let browse = CPBarButton(title: "Browse") { [weak self] _ in self?.showBrowse() }
+        let browse = CPBarButton(title: "Browse") { [weak self] _ in
+            // Leaving the video to browse pauses it (like the down arrow on the phone).
+            if let pb = self?.playback, pb.isActive, pb.isPlaying { pb.togglePlayPause() }
+            self?.showBrowse()
+        }
         let back10 = CPBarButton(image: Self.symbol("gobackward.10")) { [weak self] _ in
             self?.playback.skip(-10); self?.carVideo?.flashStrip()
         }
