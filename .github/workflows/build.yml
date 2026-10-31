@@ -72,15 +72,25 @@ jobs:
 
       - name: Package CarPlay IPA (for TrollStore / jailbreak)
         run: |
-          rm -rf Payload && mkdir Payload
-          cp -R build/Build/Products/Release-iphoneos/Ice.app Payload/
-          # Ad-hoc sign with the CarPlay video permission (TrollStore keeps these permissions).
-          if [ -d Payload/Ice.app/Frameworks ]; then
-            find Payload/Ice.app/Frameworks -maxdepth 1 \( -name "*.framework" -o -name "*.dylib" \) -exec codesign --force --sign - {} \;
-          fi
-          codesign --force --sign - --entitlements Ice-CarPlay.entitlements --generate-entitlement-der Payload/Ice.app
-          codesign -d --entitlements - Payload/Ice.app 2>&1 | grep -q carplay-video || { echo "::error::CarPlay permission missing after signing"; exit 1; }
-          zip -qry Ice-CarPlay.ipa Payload
+          set -o pipefail
+          {
+            set -ex
+            rm -rf Payload && mkdir Payload
+            cp -R build/Build/Products/Release-iphoneos/Ice.app Payload/
+            ls -la Payload/Ice.app | head -40
+            file Payload/Ice.app/Ice
+            # Ad-hoc sign with the CarPlay video permission (TrollStore keeps these permissions).
+            if [ -d Payload/Ice.app/Frameworks ]; then
+              find Payload/Ice.app/Frameworks -maxdepth 1 \( -name "*.framework" -o -name "*.dylib" \) -exec codesign --force --sign - {} \;
+            fi
+            codesign --force --sign - --entitlements Ice-CarPlay.entitlements --generate-entitlement-der Payload/Ice.app
+            codesign -d --entitlements - Payload/Ice.app 2>&1 | grep carplay-video
+            zip -qry Ice-CarPlay.ipa Payload
+          } > carplay.log 2>&1 || {
+            cat carplay.log
+            tail -25 carplay.log | while IFS= read -r line; do echo "::error::$(echo "$line" | cut -c1-300)"; done
+            exit 1
+          }
 
       - uses: actions/upload-artifact@v4
         with:
