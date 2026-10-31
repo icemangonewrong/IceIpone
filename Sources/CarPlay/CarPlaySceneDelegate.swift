@@ -47,7 +47,11 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
         playPause.image = UIImage(systemName: "playpause.fill")
         let forward = CPMapButton { [weak self] _ in self?.playback.skip(10) }
         forward.image = UIImage(systemName: "goforward.10")
-        map.mapButtons = [back, playPause, forward]
+        let next = CPMapButton { [weak self] _ in self?.playback.playNext() }
+        next.image = UIImage(systemName: "forward.end.fill")
+        map.mapButtons = [back, playPause, forward, next]
+        // Keep the playback buttons on screen (the car screen doesn't pass touches to the video itself).
+        map.hidesButtonsWithNavigationBar = false
         playPauseButton = playPause
 
         mapTemplate = map

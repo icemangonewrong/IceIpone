@@ -3,7 +3,9 @@
 <plist version="1.0">
 <dict>
 	<key>application-identifier</key>
-	<string>com.iceman.carplex</string>
+	<string>ICEMAN0001.com.iceman.carplex</string>
+	<key>com.apple.developer.team-identifier</key>
+	<string>ICEMAN0001</string>
 	<key>com.apple.developer.carplay-maps</key>
 	<true/>
 	<key>keychain-access-groups</key>
