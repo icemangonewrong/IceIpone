@@ -44,7 +44,7 @@ jobs:
             -clonedSourcePackagesDirPath build/SourcePackages \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
             build 2>&1 | tee build.log | grep -E "error:|warning: unre|BUILD (SUCCEEDED|FAILED)" || true
-          test -d build/Build/Products/Release-iphoneos/Ice.app
+          test -f build/Build/Products/Release-iphoneos/Ice.app/Ice && test -f build/Build/Products/Release-iphoneos/Ice.app/Info.plist
 
       # Turn compiler errors into GitHub annotations so they're readable without the full log.
       - name: Show errors
