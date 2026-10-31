@@ -14,6 +14,7 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
     private var carWindow: CPWindow?
     private var mapTemplate: CPMapTemplate?
     private var playPauseButton: CPMapButton?
+    private weak var carVideo: CarVideoViewController?
     private var cancellables = Set<AnyCancellable>()
 
     private var app: AppState { AppState.shared }
@@ -27,7 +28,9 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
         self.interfaceController = interfaceController
         self.carWindow = window
 
-        window.rootViewController = CarVideoViewController()
+        let video = CarVideoViewController()
+        window.rootViewController = video
+        carVideo = video
         playback.carScreenActive = true
 
         let map = CPMapTemplate()
@@ -47,9 +50,12 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
         playPause.image = UIImage(systemName: "playpause.fill")
         let forward = CPMapButton { [weak self] _ in self?.playback.skip(10) }
         forward.image = UIImage(systemName: "goforward.10")
-        map.mapButtons = [back, playPause, forward]
+        let next = CPMapButton { [weak self] _ in self?.playback.playNext() }
+        next.image = UIImage(systemName: "forward.end.fill")
+        map.mapButtons = [back, playPause, forward, next]
         playPauseButton = playPause
 
+        map.mapDelegate = self
         mapTemplate = map
         interfaceController.setRootTemplate(map, animated: false, completion: nil)
 
@@ -193,9 +199,139 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
     }
 }
 
+// TOUCH TEST: CarPlay reports drags on the map area through these callbacks.
+extension CarPlaySceneDelegate: CPMapTemplateDelegate {
+    func mapTemplateDidBeginPanGesture(_ mapTemplate: CPMapTemplate) {
+        carVideo?.probe.record("CarPlay drag started")
+    }
+
+    func mapTemplate(_ mapTemplate: CPMapTemplate, didUpdatePanGestureWithTranslation translation: CGPoint,
+                     velocity: CGPoint) {
+        carVideo?.probe.record("CarPlay drag \(Int(translation.x)),\(Int(translation.y))", countAs: .drag)
+    }
+
+    func mapTemplate(_ mapTemplate: CPMapTemplate, didEndPanGestureWithVelocity velocity: CGPoint) {
+        carVideo?.probe.record("CarPlay drag ended")
+    }
+
+    func mapTemplate(_ mapTemplate: CPMapTemplate, panWith direction: CPMapTemplate.PanDirection) {
+        carVideo?.probe.record("CarPlay pan button \(direction.rawValue)", countAs: .drag)
+    }
+}
+
+// MARK: - Touch test overlay
+
+/// Shows whether the car screen passes touches to Ice: a counter panel, a dot where
+/// each touch lands, and a button to tap. (Test build only.)
+final class TouchProbeView: UIView {
+    enum Kind { case touch, tap, drag, button }
+    private let panel = UILabel()
+    private let button = UIButton(type: .system)
+    private var counts: [Kind: Int] = [.touch: 0, .tap: 0, .drag: 0, .button: 0]
+    private var lastEvent = "nothing yet"
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        backgroundColor = .clear
+        isMultipleTouchEnabled = true
+
+        panel.numberOfLines = 0
+        panel.font = .monospacedDigitSystemFont(ofSize: 15, weight: .semibold)
+        panel.textColor = .white
+        panel.backgroundColor = UIColor.black.withAlphaComponent(0.7)
+        panel.layer.cornerRadius = 8
+        panel.layer.masksToBounds = true
+        panel.isUserInteractionEnabled = false
+        addSubview(panel)
+
+        button.setTitle("  Tap me  ", for: .normal)
+        button.titleLabel?.font = .systemFont(ofSize: 18, weight: .bold)
+        button.backgroundColor = .systemOrange
+        button.setTitleColor(.black, for: .normal)
+        button.layer.cornerRadius = 10
+        button.addTarget(self, action: #selector(buttonTapped), for: .touchUpInside)
+        addSubview(button)
+
+        addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(tapped(_:))))
+        let pan = UIPanGestureRecognizer(target: self, action: #selector(panned(_:)))
+        addGestureRecognizer(pan)
+        render()
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        let size = panel.sizeThatFits(CGSize(width: 330, height: 400))
+        panel.frame = CGRect(x: safeAreaInsets.left + 12, y: safeAreaInsets.top + 12,
+                             width: size.width + 16, height: size.height + 12)
+        button.sizeToFit()
+        button.frame.size = CGSize(width: button.frame.width + 20, height: 46)
+        button.frame.origin = CGPoint(x: panel.frame.minX, y: panel.frame.maxY + 12)
+    }
+
+    func record(_ event: String, countAs kind: Kind? = nil) {
+        if let kind { counts[kind, default: 0] += 1 }
+        lastEvent = event
+        render()
+    }
+
+    private func render() {
+        panel.text = """
+         TOUCH TEST
+         Touches:  \(counts[.touch] ?? 0)
+         Taps:     \(counts[.tap] ?? 0)
+         Drags:    \(counts[.drag] ?? 0)
+         Button:   \(counts[.button] ?? 0)
+         Last: \(lastEvent)
+        """
+        setNeedsLayout()
+    }
+
+    private func dot(at p: CGPoint, color: UIColor) {
+        let d = UIView(frame: CGRect(x: p.x - 18, y: p.y - 18, width: 36, height: 36))
+        d.backgroundColor = color.withAlphaComponent(0.8)
+        d.layer.cornerRadius = 18
+        d.isUserInteractionEnabled = false
+        addSubview(d)
+        UIView.animate(withDuration: 1.2, animations: { d.alpha = 0; d.transform = CGAffineTransform(scaleX: 2, y: 2) }) { _ in
+            d.removeFromSuperview()
+        }
+    }
+
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        super.touchesBegan(touches, with: event)
+        for t in touches {
+            let p = t.location(in: self)
+            dot(at: p, color: .systemGreen)
+            record("touch at \(Int(p.x)),\(Int(p.y))", countAs: .touch)
+        }
+    }
+
+    @objc private func tapped(_ g: UITapGestureRecognizer) {
+        let p = g.location(in: self)
+        dot(at: p, color: .systemBlue)
+        record("tap at \(Int(p.x)),\(Int(p.y))", countAs: .tap)
+    }
+
+    @objc private func panned(_ g: UIPanGestureRecognizer) {
+        if g.state == .changed || g.state == .began {
+            let p = g.location(in: self)
+            dot(at: p, color: .systemPurple)
+            record("drag at \(Int(p.x)),\(Int(p.y))", countAs: .drag)
+        }
+    }
+
+    @objc private func buttonTapped() {
+        record("button pressed", countAs: .button)
+        button.backgroundColor = button.backgroundColor == .systemOrange ? .systemGreen : .systemOrange
+    }
+}
+
 // MARK: - The video on the car screen
 
 final class CarVideoViewController: UIViewController {
+    let probe = TouchProbeView()
     private let idleLabel = UILabel()
     private let statusLabel = UILabel()
     private var cancellables = Set<AnyCancellable>()
@@ -232,6 +368,12 @@ final class CarVideoViewController: UIViewController {
         }
         idleLabel.centerYAnchor.constraint(equalTo: view.centerYAnchor).isActive = true
         statusLabel.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -16).isActive = true
+
+        // TOUCH TEST overlay on top of everything
+        probe.frame = view.bounds
+        probe.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        view.addSubview(probe)
+        view.isUserInteractionEnabled = true
 
         let pb = PlaybackManager.shared
         pb.$isActive
