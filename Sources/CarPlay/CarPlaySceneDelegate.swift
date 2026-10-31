@@ -137,14 +137,7 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
 
             let cwItems = Array(app.continueWatching.prefix(12))
             if !cwItems.isEmpty {
-                // TEST: a row of bigger posters (CarPlay may not allow this for this kind of app).
-                let posters = CPListItem(text: "Continue Watching — posters (test)", detailText: "Bigger pictures",
-                                         image: Self.symbol("square.grid.2x2"))
-                posters.accessoryType = .disclosureIndicator
-                posters.handler = { [weak self] _, done in
-                    self?.showPosterRow(cwItems)
-                    done()
-                }
+                let posters = makePosterRow(cwItems)
                 let cw = cwItems.map { makeItemRow($0) }
                 sections.append(CPListSection(items: [posters] + cw, header: "Continue Watching", sectionIndexTitle: nil))
             }
@@ -233,28 +226,50 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
         return item.displaySubtitle
     }
 
-    /// TEST: Continue Watching as one row of bigger posters; tap a poster to play it.
-    private func showPosterRow(_ items: [PlexItem]) {
+    /// Continue Watching as one row of posters; tap a poster to resume it.
+    private func makePosterRow(_ items: [PlexItem]) -> CPListImageRowItem {
         let shown = Array(items.prefix(CPMaximumNumberOfGridImages))
-        let blank = UIImage.from(color: UIColor(white: 0.2, alpha: 1), size: CGSize(width: 60, height: 90))
+        let size = CPListImageRowItem.maximumImageSize
+        let blank = carImage(UIImage.from(color: UIColor(white: 0.2, alpha: 1), size: size), size: size)
         let row = CPListImageRowItem(text: "Continue Watching", images: shown.map { _ in blank })
         row.listImageRowHandler = { [weak self] _, index, done in
             if index < shown.count { self?.startPlayback(shown[index]) }
             done()
         }
-        let rest = shown.map { makeItemRow($0) }
-        let list = CPListTemplate(title: "Continue Watching", sections: [CPListSection(items: [row] + rest)])
-        interfaceController?.pushTemplate(list, animated: true, completion: nil)
+        row.handler = { _, done in done() }
         Task {
             var images = shown.map { _ in blank }
             for (i, item) in shown.enumerated() {
-                guard let url = app.client.imageURL(item.posterPath, width: 200, height: 300),
+                guard let url = app.client.imageURL(item.posterPath, width: 600, height: 900),
                       let result = try? await URLSession.shared.dataCompat(from: url),
                       let img = UIImage(data: result.0) else { continue }
-                images[i] = img
+                images[i] = carImage(img, size: size)
                 row.update(images)
             }
         }
+        return row
+    }
+
+    /// Redraws a picture at exactly the size CarPlay shows it, at the car screen's pixel density,
+    /// so CarPlay doesn't scale a small phone image up (which is what made the posters blurry).
+    private func carImage(_ img: UIImage, size: CGSize) -> UIImage {
+        let traits = interfaceController?.carTraitCollection
+        let scale = max(traits?.displayScale ?? 0, 2)
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = scale
+        format.opaque = true
+        let out = UIGraphicsImageRenderer(size: size, format: format).image { ctx in
+            UIColor(white: 0.12, alpha: 1).setFill()
+            ctx.fill(CGRect(origin: .zero, size: size))
+            // fill the space, cropping the edges evenly
+            let s = max(size.width / max(img.size.width, 1), size.height / max(img.size.height, 1))
+            let w = img.size.width * s, h = img.size.height * s
+            img.draw(in: CGRect(x: (size.width - w) / 2, y: (size.height - h) / 2, width: w, height: h))
+        }
+        guard let traits else { return out }
+        let asset = UIImageAsset()
+        asset.register(out, with: traits)
+        return asset.image(with: traits)
     }
 
     /// One row in a CarPlay list. Playable items start playing; shows/seasons drill down.
@@ -273,11 +288,11 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
         }
 
         // Load the poster in the background.
-        if let url = app.client.imageURL(item.posterPath, width: 120, height: 180) {
-            Task.detached {
+        if let url = app.client.imageURL(item.posterPath, width: 240, height: 360) {
+            Task {
                 if let result = try? await URLSession.shared.dataCompat(from: url),
                    let img = UIImage(data: result.0) {
-                    await MainActor.run { row.setImage(img) }
+                    row.setImage(self.carImage(img, size: CPListItem.maximumImageSize))
                 }
             }
         }
