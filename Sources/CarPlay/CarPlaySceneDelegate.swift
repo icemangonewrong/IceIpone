@@ -1,4 +1,5 @@
 import UIKit
+import SwiftUI
 import CarPlay
 import AVFoundation
 import Combine
@@ -15,6 +16,7 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
     private var mapTemplate: CPMapTemplate?
     private var playPauseButton: CPMapButton?
     private var playPauseBarButton: CPBarButton?
+    private weak var carVideo: CarVideoViewController?
     private var idleBar: ([CPBarButton], [CPBarButton]) = ([], [])
     private var playingBar: ([CPBarButton], [CPBarButton]) = ([], [])
 
@@ -35,7 +37,9 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
         self.interfaceController = interfaceController
         self.carWindow = window
 
-        window.rootViewController = CarVideoViewController()
+        let video = CarVideoViewController()
+        window.rootViewController = video
+        carVideo = video
         playback.carScreenActive = true
 
         let map = CPMapTemplate()
@@ -65,6 +69,7 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
         map.hidesButtonsWithNavigationBar = false
         playPauseButton = playPause
 
+        map.mapDelegate = self
         mapTemplate = map
         interfaceController.setRootTemplate(map, animated: false, completion: nil)
 
@@ -316,10 +321,78 @@ extension UIImage {
     }
 }
 
+// The bottom info strip follows the top bar: shown together, hidden together.
+extension CarPlaySceneDelegate: CPMapTemplateDelegate {
+    func mapTemplateDidShowNavigationBar(_ mapTemplate: CPMapTemplate) {
+        carVideo?.setBarShown(true)
+    }
+
+    func mapTemplateDidDismissNavigationBar(_ mapTemplate: CPMapTemplate) {
+        carVideo?.setBarShown(false)
+    }
+}
+
 // MARK: - The video on the car screen
 
 final class CarVideoViewController: UIViewController {
     private let idleLabel = UILabel()
+    // Bottom strip: title, time and progress (can't be tapped; the buttons live in the top bar).
+    private let strip = UIView()
+    private let stripTitle = UILabel()
+    private let stripTime = UILabel()
+    private let stripProgress = UIProgressView(progressViewStyle: .default)
+    private var barShown = true
+
+    func setBarShown(_ shown: Bool) {
+        barShown = shown
+        updateStrip(animated: true)
+    }
+
+    private func updateStrip(animated: Bool) {
+        let pb = PlaybackManager.shared
+        let show = pb.isActive && (barShown || !pb.isPlaying)
+        let change = { self.strip.alpha = show ? 1 : 0 }
+        if animated { UIView.animate(withDuration: 0.25, animations: change) } else { change() }
+        if let item = pb.current {
+            let sub = CarPlaySceneDelegate.subtitle(for: item)
+            stripTitle.text = CarPlaySceneDelegate.title(for: item) + (sub.map { "  ·  " + $0 } ?? "")
+        }
+        stripTime.text = "\(timeString(pb.currentTime)) / \(timeString(pb.duration))"
+        stripProgress.progress = pb.duration > 0 ? Float(pb.currentTime / pb.duration) : 0
+    }
+
+    private func buildStrip() {
+        strip.backgroundColor = UIColor.black.withAlphaComponent(0.72)
+        strip.isUserInteractionEnabled = false
+        strip.alpha = 0
+        stripTitle.font = .systemFont(ofSize: 15, weight: .semibold)
+        stripTitle.textColor = .white
+        stripTime.font = .monospacedDigitSystemFont(ofSize: 14, weight: .semibold)
+        stripTime.textColor = UIColor.white.withAlphaComponent(0.75)
+        stripTime.setContentCompressionResistancePriority(.required, for: .horizontal)
+        stripProgress.progressTintColor = UIColor(Color.ice)
+        stripProgress.trackTintColor = UIColor.white.withAlphaComponent(0.25)
+        for v in [strip, stripTitle, stripTime, stripProgress] { v.translatesAutoresizingMaskIntoConstraints = false }
+        view.addSubview(strip)
+        strip.addSubview(stripTitle)
+        strip.addSubview(stripTime)
+        strip.addSubview(stripProgress)
+        let g = view.safeAreaLayoutGuide
+        NSLayoutConstraint.activate([
+            strip.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            strip.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            strip.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            stripProgress.leadingAnchor.constraint(equalTo: g.leadingAnchor, constant: 16),
+            stripProgress.trailingAnchor.constraint(equalTo: g.trailingAnchor, constant: -16),
+            stripProgress.bottomAnchor.constraint(equalTo: g.bottomAnchor, constant: -10),
+            stripTitle.leadingAnchor.constraint(equalTo: stripProgress.leadingAnchor),
+            stripTitle.bottomAnchor.constraint(equalTo: stripProgress.topAnchor, constant: -8),
+            stripTitle.trailingAnchor.constraint(lessThanOrEqualTo: stripTime.leadingAnchor, constant: -12),
+            stripTime.trailingAnchor.constraint(equalTo: stripProgress.trailingAnchor),
+            stripTime.centerYAnchor.constraint(equalTo: stripTitle.centerYAnchor),
+            strip.topAnchor.constraint(equalTo: stripTitle.topAnchor, constant: -10),
+        ])
+    }
     private let statusLabel = UILabel()
     private var cancellables = Set<AnyCancellable>()
 
@@ -354,9 +427,14 @@ final class CarVideoViewController: UIViewController {
             ])
         }
         idleLabel.centerYAnchor.constraint(equalTo: view.centerYAnchor).isActive = true
-        statusLabel.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -16).isActive = true
+        statusLabel.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -78).isActive = true
 
+        buildStrip()
         let pb = PlaybackManager.shared
+        pb.$currentTime.combineLatest(pb.$isPlaying, pb.$isActive)
+            .throttle(for: .milliseconds(500), scheduler: RunLoop.main, latest: true)
+            .sink { [weak self] _ in self?.updateStrip(animated: true) }
+            .store(in: &cancellables)
         pb.$isActive
             .receive(on: RunLoop.main)
             .sink { [weak self] active in self?.idleLabel.isHidden = active }
