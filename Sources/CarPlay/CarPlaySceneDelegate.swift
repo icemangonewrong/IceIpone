@@ -9,7 +9,7 @@ import Combine
 /// It registers as a navigation-style app, which is the only kind that gets a raw
 /// drawing window on the car display. The video is drawn in that window, and
 /// browsing uses CarPlay's built-in list screens.
-final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate {
+final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPInterfaceControllerDelegate {
     private var interfaceController: CPInterfaceController?
     private var carWindow: CPWindow?
     private var mapTemplate: CPMapTemplate?
@@ -27,6 +27,9 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
                                   to window: CPWindow) {
         self.interfaceController = interfaceController
         self.carWindow = window
+        interfaceController.delegate = self
+        let entitlements = (Bundle.main.object(forInfoDictionaryKey: "CFBundleIdentifier") as? String) ?? "?"
+        CarLog.add("test 3 · bundle \(entitlements) · scene \(templateApplicationScene.session.role.rawValue.suffix(30))")
 
         let video = CarVideoViewController()
         window.rootViewController = video
@@ -87,6 +90,14 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
                 self?.playPauseButton?.image = UIImage(systemName: playing ? "pause.fill" : "play.fill")
             }
             .store(in: &cancellables)
+    }
+
+    func templateWillAppear(_ aTemplate: CPTemplate, animated: Bool) {
+        CarLog.add("CarPlay: will show \(type(of: aTemplate))")
+    }
+
+    func templateDidAppear(_ aTemplate: CPTemplate, animated: Bool) {
+        CarLog.add("CarPlay: showing \(type(of: aTemplate))")
     }
 
     func templateApplicationScene(_ templateApplicationScene: CPTemplateApplicationScene,
