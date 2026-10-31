@@ -74,7 +74,13 @@ jobs:
         run: |
           rm -rf Payload && mkdir Payload
           cp -R build/Build/Products/Release-iphoneos/Ice.app Payload/
-          ldid -SIce-CarPlay.entitlements Payload/Ice.app/Ice
+          file Payload/Ice.app/Ice
+          ls Payload/Ice.app/Frameworks 2>/dev/null || true
+          if ! ldid -SIce-CarPlay.entitlements Payload/Ice.app/Ice > ldid.log 2>&1; then
+            cat ldid.log
+            while IFS= read -r line; do echo "::error::ldid: $line"; done < ldid.log
+            exit 1
+          fi
           zip -qry Ice-CarPlay.ipa Payload
 
       - uses: actions/upload-artifact@v4
