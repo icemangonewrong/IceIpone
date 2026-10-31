@@ -64,7 +64,7 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
             guard let ic = self?.interfaceController else { CarLog.add("2s: interface controller gone"); return }
-            let root = ic.rootTemplate.map { String(describing: type(of: $0)) } ?? "nil"
+            let root = String(describing: type(of: ic.rootTemplate))
             let top = ic.topTemplate.map { String(describing: type(of: $0)) } ?? "nil"
             CarLog.add("2s: root=\(root) top=\(top) stack=\(ic.templates.count)")
         }
