@@ -20,8 +20,8 @@ targets:
       path: Info.plist
       properties:
         CFBundleDisplayName: Ice
-        CFBundleShortVersionString: "3.4"
-        CFBundleVersion: "20"
+        CFBundleShortVersionString: "3.5"
+        CFBundleVersion: "21"
         ITSAppUsesNonExemptEncryption: false
         UILaunchScreen: {}
         UIUserInterfaceStyle: Dark

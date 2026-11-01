@@ -51,10 +51,16 @@ private struct PlayerView: View {
                     .ignoresSafeArea()
 
                 // Tap the picture: pause/play if that's turned on in Settings, otherwise show/hide the bar.
+                // Double tap: zoom (3 steps, or back to normal in pinch mode). Pinch mode: pinch to zoom, drag to move.
                 Color.clear
                     .contentShape(Rectangle())
                     .ignoresSafeArea()
+                    .onTapGesture(count: 2) {
+                        if app.zoomMode == "pinch" { playback.resetZoom(announce: true) }
+                        else { playback.zoomStepTap(in: geo.size) }
+                    }
                     .onTapGesture { tapped() }
+                    .simultaneousGesture(pinchGesture(geo.size), including: app.zoomMode == "pinch" ? .all : .subviews)
 
                 Group {
                     if playback.waitingForSignal {
@@ -277,6 +283,32 @@ private struct PlayerView: View {
         }
     }
 
+    @State private var lastMagnification: CGFloat = 1
+    @State private var lastDrag: CGSize = .zero
+
+    private func pinchGesture(_ size: CGSize) -> some Gesture {
+        MagnificationGesture()
+            .simultaneously(with: DragGesture(minimumDistance: 8))
+            .onChanged { v in
+                var factor: CGFloat = 1
+                if let m = v.first {
+                    factor = m / lastMagnification
+                    lastMagnification = m
+                }
+                var dx: CGFloat = 0, dy: CGFloat = 0
+                if let d = v.second {
+                    dx = d.translation.width - lastDrag.width
+                    dy = d.translation.height - lastDrag.height
+                    lastDrag = d.translation
+                }
+                playback.pinch(factor: factor, dx: dx, dy: dy, in: size)
+            }
+            .onEnded { _ in
+                lastMagnification = 1
+                lastDrag = .zero
+            }
+    }
+
     private func tapped() {
         if app.tapToPause {
             playback.togglePlayPause()
@@ -435,6 +467,7 @@ struct VideoHost: UIViewRepresentable {
     func makeUIView(context: Context) -> UIView {
         let container = UIView()
         container.backgroundColor = .black
+        container.clipsToBounds = true
         attach(to: container)
         return container
     }

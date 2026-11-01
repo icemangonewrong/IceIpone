@@ -98,6 +98,16 @@ struct SettingsView: View {
                 Toggle("Pause when the screen is tapped", isOn: $app.tapToPause)
             }
 
+            Section(header: Text("Zoom"), footer: Text(app.zoomMode == "pinch"
+                ? "Pinch to zoom to any size and drag with one finger to move the picture. Double tap goes back to normal."
+                : "Double tap zooms in a little, again a little more, a third time fills the screen, and a fourth goes back to normal.")) {
+                Picker("Zoom", selection: $app.zoomMode) {
+                    Text("Double-tap steps").tag("steps")
+                    Text("Pinch to zoom").tag("pinch")
+                }
+                .pickerStyle(SegmentedPickerStyle())
+            }
+
             Section(header: Text("Audio delay"), footer: Text("Set from the player's audio delay button. Each Bluetooth device (like your truck) keeps its own setting and it's used automatically when that device is connected.")) {
                 if app.audioDelays.isEmpty {
                     Text("No devices adjusted yet").foregroundColor(.secondary)

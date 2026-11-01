@@ -34,10 +34,12 @@ final class PlaybackManager: NSObject, ObservableObject {
     /// Out of signal AND out of cached video: we're waiting for coverage.
     @Published private(set) var waitingForSignal = false
     /// Whether the phone's player screen should be showing (stays up between episodes).
-    @Published var showPlayerUI = false
+    @Published var showPlayerUI = false {
+        didSet { applyZoom() }
+    }
     /// True when the CarPlay screen (jailbreak build) is showing the video.
     @Published var carScreenActive = false {
-        didSet { updateMotionMonitoring() }
+        didSet { updateMotionMonitoring(); applyZoom() }
     }
     /// True while playback is held because the vehicle is moving.
     @Published private(set) var heldForMotion = false
@@ -172,7 +174,7 @@ final class PlaybackManager: NSObject, ObservableObject {
 
     /// Stops playback and saves the position to Plex.
     func stop(reportOnly: Bool = false) async {
-        if !reportOnly { showPlayerUI = false }
+        if !reportOnly { showPlayerUI = false; resetZoom() }
         guard isActive, let item = current else {
             isActive = false
             return
@@ -221,6 +223,60 @@ final class PlaybackManager: NSObject, ObservableObject {
     // MARK: - Mini player
 
     /// Pause and shrink to the mini player along the bottom of the app.
+    // MARK: - Zoom (full-screen player on the phone only)
+
+    @Published private(set) var zoomScale: CGFloat = 1
+    private var zoomPan: CGSize = .zero
+    private var zoomStep = 0
+
+    private func applyZoom() {
+        let on = showPlayerUI && !carScreenActive
+        videoView.transform = on
+            ? CGAffineTransform(translationX: zoomPan.width, y: zoomPan.height).scaledBy(x: zoomScale, y: zoomScale)
+            : .identity
+    }
+
+    /// How much to enlarge the fitted picture so it fills the screen with no black bars.
+    private func fillScale(_ size: CGSize) -> CGFloat {
+        guard size.width > 0, size.height > 0 else { return 1 }
+        var aspect: CGFloat = 16.0 / 9.0
+        if let v = vlc?.videoSize, v.width > 0, v.height > 0 { aspect = v.width / v.height }
+        let fitW = min(size.width, size.height * aspect)
+        let fitH = fitW / aspect
+        return max(size.width / fitW, size.height / fitH)
+    }
+
+    /// Double tap in step mode: 1 of 3, 2 of 3, fill the screen, then back to normal.
+    func zoomStepTap(in size: CGSize) {
+        let fill = fillScale(size)
+        let levels: [CGFloat] = fill > 1.02 ? [1, 1 + (fill - 1) / 3, 1 + 2 * (fill - 1) / 3, fill] : [1, 1.1, 1.2, 1.33]
+        zoomStep = (zoomStep + 1) % 4
+        zoomScale = levels[zoomStep]
+        zoomPan = .zero
+        applyZoom()
+        showToast(zoomStep == 0 ? "Original size" : zoomStep == 3 ? "Zoom 3 of 3 · fill screen" : "Zoom \(zoomStep) of 3")
+    }
+
+    /// Pinch mode: scale by `factor` and move by `dx`,`dy`, kept inside the screen.
+    func pinch(factor: CGFloat, dx: CGFloat, dy: CGFloat, in size: CGSize) {
+        let z = min(max(zoomScale * factor, 1), 4)
+        zoomScale = z
+        let maxX = (z - 1) * size.width / 2
+        let maxY = (z - 1) * size.height / 2
+        zoomPan = CGSize(width: min(max(zoomPan.width + dx, -maxX), maxX),
+                         height: min(max(zoomPan.height + dy, -maxY), maxY))
+        applyZoom()
+    }
+
+    func resetZoom(announce: Bool = false) {
+        let was = zoomScale != 1
+        zoomStep = 0
+        zoomScale = 1
+        zoomPan = .zero
+        applyZoom()
+        if announce && was { showToast("Original size") }
+    }
+
     func minimize() {
         if wantsPlay { togglePlayPause() }
         showPlayerUI = false

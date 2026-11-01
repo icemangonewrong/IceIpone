@@ -30,6 +30,10 @@ final class AppState: ObservableObject {
     }
     static let bufferChoices = [2, 5, 10, 20, 30]
     /// Tapping the video pauses/plays (otherwise a tap just shows or hides the controls).
+    /// "steps" = double tap zooms in 3 steps then back; "pinch" = pinch to any size, drag to move.
+    @Published var zoomMode: String {
+        didSet { UserDefaults.standard.set(zoomMode, forKey: "zoomMode") }
+    }
     @Published var tapToPause: Bool {
         didSet { UserDefaults.standard.set(tapToPause, forKey: Keys.tapToPause) }
     }
@@ -71,6 +75,7 @@ final class AppState: ObservableObject {
         let savedBuffer = defaults.object(forKey: Keys.bufferMinutes) as? Int ?? 2
         bufferMinutes = AppState.bufferChoices.contains(savedBuffer) ? savedBuffer : 2
         tapToPause = defaults.object(forKey: Keys.tapToPause) as? Bool ?? false
+        zoomMode = defaults.string(forKey: "zoomMode") ?? "steps"
         audioDelays = defaults.dictionary(forKey: Keys.audioDelays) as? [String: Int] ?? [:]
 
         token = Keychain.read(Keys.tokenAccount)
