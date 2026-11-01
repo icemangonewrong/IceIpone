@@ -51,16 +51,13 @@ private struct PlayerView: View {
                     .ignoresSafeArea()
 
                 // Tap the picture: pause/play if that's turned on in Settings, otherwise show/hide the bar.
-                // Double tap: zoom (3 steps, or back to normal in pinch mode). Pinch mode: pinch to zoom, drag to move.
+                // Double tap: zoom in 3 steps, 4th back to normal. Pinch: zoom to any size, drag to move.
                 Color.clear
                     .contentShape(Rectangle())
                     .ignoresSafeArea()
-                    .onTapGesture(count: 2) {
-                        if app.zoomMode == "pinch" { playback.resetZoom(announce: true) }
-                        else { playback.zoomStepTap(in: geo.size) }
-                    }
+                    .onTapGesture(count: 2) { playback.zoomStepTap(in: geo.size) }
                     .onTapGesture { tapped() }
-                    .simultaneousGesture(pinchGesture(geo.size), including: app.zoomMode == "pinch" ? .all : .subviews)
+                    .simultaneousGesture(pinchGesture(geo.size))
 
                 Group {
                     if playback.waitingForSignal {
@@ -182,18 +179,29 @@ private struct PlayerView: View {
                         Spacer(minLength: 8)
                         rightButtons
                     }
-                    transport
+                    // X sits halfway between Next and the edge so it isn't hit by accident.
+                    HStack(spacing: 0) {
+                        Spacer(minLength: 0).frame(maxWidth: .infinity)
+                        transport
+                        HStack(spacing: 0) { Spacer(minLength: 0); closeButton; Spacer(minLength: 0) }
+                            .frame(maxWidth: .infinity)
+                    }
                 }
                 .padding(.horizontal, 16)
                 .padding(.bottom, 10)
             } else {
-                ZStack {
-                    HStack {
-                        info
-                        Spacer(minLength: 12)
+                // Equal-width halves keep play centered; the X sits halfway between Next and the right buttons.
+                HStack(spacing: 0) {
+                    HStack(spacing: 0) { info; Spacer(minLength: 12) }
+                        .frame(maxWidth: .infinity)
+                    transport
+                    HStack(spacing: 0) {
+                        Spacer(minLength: 8)
+                        closeButton
+                        Spacer(minLength: 8)
                         rightButtons
                     }
-                    transport
+                    .frame(maxWidth: .infinity)
                 }
                 .padding(.horizontal, 24)
                 .padding(.bottom, 8)
@@ -248,6 +256,18 @@ private struct PlayerView: View {
             barButton("forward.end.fill", size: 20) { playback.playNext() }
                 .opacity(isEpisode ? (playback.nextItem == nil ? 0.35 : 1) : 0)
                 .disabled(!isEpisode || playback.nextItem == nil)
+        }
+    }
+
+    /// Stop the video (saves the spot) and close the player.
+    private var closeButton: some View {
+        Button {
+            Task { await playback.stop() }
+        } label: {
+            Image(systemName: "xmark")
+                .font(.system(size: 19, weight: .bold))
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
         }
     }
 

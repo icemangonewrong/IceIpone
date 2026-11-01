@@ -250,6 +250,8 @@ final class PlaybackManager: NSObject, ObservableObject {
 
     /// Double tap in step mode: 1 of 3, 2 of 3, fill the screen, then back to normal.
     func zoomStepTap(in size: CGSize) {
+        // After a pinch to a custom size, a double tap goes back to normal.
+        if zoomStep < 0 { resetZoom(announce: true); return }
         let fill = fillScale(size)
         let levels: [CGFloat] = fill > 1.02 ? [1, 1 + (fill - 1) / 3, 1 + 2 * (fill - 1) / 3, fill] : [1, 1.1, 1.2, 1.33]
         zoomStep = (zoomStep + 1) % 4
@@ -262,6 +264,7 @@ final class PlaybackManager: NSObject, ObservableObject {
     /// Pinch mode: scale by `factor` and move by `dx`,`dy`, kept inside the screen.
     func pinch(factor: CGFloat, dx: CGFloat, dy: CGFloat, in size: CGSize) {
         let z = min(max(zoomScale * factor, 1), 4)
+        if z != zoomScale || dx != 0 || dy != 0 { zoomStep = z == 1 ? 0 : -1 }
         zoomScale = z
         let size = videoView.superview?.bounds.size ?? size
         let maxX = (z - 1) * size.width / 2
