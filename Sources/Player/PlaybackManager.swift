@@ -237,7 +237,9 @@ final class PlaybackManager: NSObject, ObservableObject {
     }
 
     /// How much to enlarge the fitted picture so it fills the screen with no black bars.
-    private func fillScale(_ size: CGSize) -> CGFloat {
+    private func fillScale(_ given: CGSize) -> CGFloat {
+        // Measure the real video area (the whole screen, notch included), not the safe area.
+        let size = videoView.superview?.bounds.size ?? given
         guard size.width > 0, size.height > 0 else { return 1 }
         var aspect: CGFloat = 16.0 / 9.0
         if let v = vlc?.videoSize, v.width > 0, v.height > 0 { aspect = v.width / v.height }
@@ -261,6 +263,7 @@ final class PlaybackManager: NSObject, ObservableObject {
     func pinch(factor: CGFloat, dx: CGFloat, dy: CGFloat, in size: CGSize) {
         let z = min(max(zoomScale * factor, 1), 4)
         zoomScale = z
+        let size = videoView.superview?.bounds.size ?? size
         let maxX = (z - 1) * size.width / 2
         let maxY = (z - 1) * size.height / 2
         zoomPan = CGSize(width: min(max(zoomPan.width + dx, -maxX), maxX),
