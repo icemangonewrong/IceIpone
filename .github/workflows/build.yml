@@ -64,6 +64,9 @@ jobs:
             echo "::error file=$f,line=$l::$f:$l $msg"
           done < errors.txt
 
+      - name: Stamp build number
+        run: /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${{ github.run_number }}" build/Build/Products/Release-iphoneos/Ice.app/Info.plist
+
       - name: Package Feather IPA (sign with your Arctic cert)
         run: |
           rm -rf Payload && mkdir Payload

@@ -126,6 +126,15 @@ struct SettingsView: View {
             Section {
                 Button(action: { app.signOut() }) { Text("Sign out").foregroundColor(.red) }
             }
+
+            Section(header: Text("About"), footer: Text("The newest build number is shown on the download page.")) {
+                Text("Ice for iPhone  ·  build \(Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?")")
+                Button("Check for updates") {
+                    if let url = URL(string: "https://github.com/icemangonewrong/IceIpone/releases/latest") {
+                        UIApplication.shared.open(url)
+                    }
+                }
+            }
         }
         .navigationTitle("Settings")
         .onChange(of: app.excludedSections) { _ in
