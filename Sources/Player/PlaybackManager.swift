@@ -653,6 +653,43 @@ final class PlaybackManager: NSObject, ObservableObject {
         AVAudioSession.sharedInstance().currentRoute.outputs.first?.portName ?? "iPhone"
     }
 
+    // MARK: - Online subtitles
+
+    static var subtitleSearchLanguage: String {
+        get { UserDefaults.standard.string(forKey: "subSearchLang") ?? String((Locale.preferredLanguages.first ?? "en").prefix(2)) }
+        set { UserDefaults.standard.set(newValue, forKey: "subSearchLang") }
+    }
+
+    /// Has the server download that subtitle, then switches to it once it shows up with the video.
+    func downloadSubtitle(_ sub: OnlineSubtitle) {
+        guard let item = current, let streamKey = sub.key else { return }
+        let key = item.ratingKey.value
+        let c = client
+        showToast("Downloading subtitles…")
+        Task {
+            do {
+                let before = Set((try? await c.details(key))?.firstPart?.Stream?.compactMap { $0.isExternalSubtitle ? $0.key : nil } ?? [])
+                try await c.downloadSubtitle(key, streamKey: streamKey)
+                var found: PlexStream?
+                for _ in 0..<20 {
+                    try? await Task.sleep(nanoseconds: 1_500_000_000)
+                    let streams = (try? await c.details(key))?.firstPart?.Stream ?? []
+                    if let s = streams.last(where: { $0.isExternalSubtitle && !before.contains($0.key ?? "") }) { found = s; break }
+                }
+                guard current?.ratingKey.value == key else { return }
+                guard let s = found, let k = s.key, let url = c.streamURL(k) else {
+                    showToast("The server didn't get those subtitles. Try another one.")
+                    return
+                }
+                _ = vlc?.addPlaybackSlave(url, type: .subtitle, enforce: true)
+                objectWillChange.send()
+                showToast("Subtitles: \(sub.name)")
+            } catch {
+                if current?.ratingKey.value == key { showToast("Couldn't download: \(error.localizedDescription)") }
+            }
+        }
+    }
+
     func showToast(_ text: String) {
         toast = text
         toastTask?.cancel()

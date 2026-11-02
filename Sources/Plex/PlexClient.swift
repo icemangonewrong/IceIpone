@@ -236,6 +236,29 @@ final class PlexClient {
         return eps.indices.contains(j) ? eps[j] : nil
     }
 
+    // MARK: - Online subtitles (the same search Plex's own apps use)
+
+    /// Subtitles the server finds online for this video, best first.
+    func searchSubtitles(_ ratingKey: String, language: String, hearingImpaired: Bool) async throws -> [OnlineSubtitle] {
+        let data = try await serverGET("/library/metadata/\(ratingKey)/subtitles", query: [
+            URLQueryItem(name: "language", value: language),
+            URLQueryItem(name: "hearingImpaired", value: hearingImpaired ? "1" : "0"),
+            URLQueryItem(name: "forced", value: "0"),
+        ])
+        let list = (try JSONDecoder().decode(PlexResponse<OnlineSubtitleContainer>.self, from: data)).MediaContainer.Stream ?? []
+        return list.filter { $0.key != nil }.sorted {
+            $0.isPerfect != $1.isPerfect ? $0.isPerfect : $0.scoreValue > $1.scoreValue
+        }
+    }
+
+    /// Tells the server to fetch that subtitle and keep it with the video (it shows up a moment later).
+    func downloadSubtitle(_ ratingKey: String, streamKey: String) async throws {
+        guard let server else { throw PlexError.noServer }
+        let url = try serverURL(base: server.baseURL, path: "/library/metadata/\(ratingKey)/subtitles",
+                                query: [URLQueryItem(name: "key", value: streamKey)])
+        _ = try await send(request(url, method: "PUT", token: server.accessToken, timeout: 40))
+    }
+
     /// Address of a subtitle file Plex keeps next to a video.
     func streamURL(_ key: String) -> URL? {
         guard let server else { return nil }

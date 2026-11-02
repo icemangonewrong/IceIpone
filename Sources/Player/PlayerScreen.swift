@@ -40,6 +40,7 @@ private struct PlayerView: View {
     @State private var scrubValue: Double = 0
     @State private var showAudioDelay = false
     @State private var showSubtitleTiming = false
+    @State private var showSubtitleSearch = false
 
     private let barHeight: CGFloat = 96
 
@@ -149,6 +150,11 @@ private struct PlayerView: View {
                         describe: { $0 < 0 ? "Subtitles show earlier" : ($0 > 0 ? "Subtitles show later" : "No adjustment") },
                         onChange: { playback.setSubtitleDelay($0) })
                 .sheetHeight(300)
+        }
+        .sheet(isPresented: $showSubtitleSearch, onDismiss: scheduleHide) {
+            if let item = playback.current {
+                SubtitleSearchSheet(ratingKey: item.ratingKey.value) { playback.downloadSubtitle($0) }
+            }
         }
     }
 
@@ -274,7 +280,8 @@ private struct PlayerView: View {
     private var rightButtons: some View {
         HStack(spacing: 4) {
             TracksMenu(onOpen: { hideTask?.cancel() },
-                       onSubtitleTiming: { hideTask?.cancel(); showSubtitleTiming = true })
+                       onSubtitleTiming: { hideTask?.cancel(); showSubtitleTiming = true },
+                       onSubtitleSearch: { hideTask?.cancel(); showSubtitleSearch = true })
             Button {
                 hideTask?.cancel()
                 showAudioDelay = true
@@ -383,6 +390,82 @@ private struct UpNextCard: View {
         .frame(width: 300)
         .bg(Color(red: 0.07, green: 0.07, blue: 0.09).opacity(0.95), RoundedRectangle(cornerRadius: 14))
         .overlay(RoundedRectangle(cornerRadius: 14).stroke(.white.opacity(0.15)))
+    }
+}
+
+/// Find subtitles online through the Plex server (it searches OpenSubtitles, like Plex's own apps).
+private struct SubtitleSearchSheet: View {
+    static let languages: [(String, String)] = [
+        ("English", "en"), ("Spanish", "es"), ("French", "fr"), ("German", "de"), ("Italian", "it"),
+        ("Portuguese", "pt"), ("Dutch", "nl"), ("Swedish", "sv"), ("Norwegian", "no"), ("Danish", "da"),
+        ("Finnish", "fi"), ("Polish", "pl"), ("Russian", "ru"), ("Ukrainian", "uk"), ("Czech", "cs"),
+        ("Hungarian", "hu"), ("Romanian", "ro"), ("Greek", "el"), ("Turkish", "tr"), ("Arabic", "ar"),
+        ("Hebrew", "he"), ("Hindi", "hi"), ("Japanese", "ja"), ("Korean", "ko"), ("Chinese", "zh"),
+        ("Vietnamese", "vi"), ("Thai", "th"), ("Indonesian", "id"),
+    ]
+
+    let ratingKey: String
+    let onPick: (OnlineSubtitle) -> Void
+    @Environment(\.presentationMode) private var presentationMode
+    @State private var language = PlaybackManager.subtitleSearchLanguage
+    @State private var sdh = false
+    @State private var results: [OnlineSubtitle] = []
+    @State private var status = "Searching…"
+    @State private var searchID = 0
+
+    var body: some View {
+        NavigationView {
+            List {
+                Section(footer: Text("Your Plex server looks them up online (OpenSubtitles) and saves the one you pick with the video.")) {
+                    Picker("Language", selection: $language) {
+                        ForEach(Self.languages, id: \.1) { Text($0.0).tag($0.1) }
+                    }
+                    Toggle("Hearing impaired (SDH)", isOn: $sdh)
+                }
+                Section(header: Text(status)) {
+                    ForEach(results) { r in
+                        Button {
+                            onPick(r)
+                            presentationMode.wrappedValue.dismiss()
+                        } label: {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text((r.isPerfect ? "★ " : "") + r.name).foregroundColor(.white).lineLimit(2)
+                                if !r.details.isEmpty {
+                                    Text(r.details).font(.caption).foregroundColor(.secondary)
+                                }
+                            }
+                            .padding(.vertical, 2)
+                        }
+                    }
+                }
+            }
+            .listStyle(InsetGroupedListStyle())
+            .navigationBarTitle("Search for subtitles", displayMode: .inline)
+            .navigationBarItems(trailing: Button("Close") { presentationMode.wrappedValue.dismiss() })
+        }
+        .navigationViewStyle(StackNavigationViewStyle())
+        .preferredColorScheme(.dark)
+        .onAppear { search() }
+        .onChange(of: language) { _ in PlaybackManager.subtitleSearchLanguage = language; search() }
+        .onChange(of: sdh) { _ in search() }
+    }
+
+    private func search() {
+        searchID += 1
+        let id = searchID, lang = language, hi = sdh
+        results = []
+        status = "Searching…"
+        Task { @MainActor in
+            do {
+                let found = try await AppState.shared.client.searchSubtitles(ratingKey, language: lang, hearingImpaired: hi)
+                guard id == searchID else { return }
+                results = found
+                status = found.isEmpty ? "Nothing found in that language" : "\(found.count) found · tap one to use it"
+            } catch {
+                guard id == searchID else { return }
+                status = "Couldn't search: \(error.localizedDescription)"
+            }
+        }
     }
 }
 
@@ -511,6 +594,7 @@ private struct TracksMenu: View {
     @EnvironmentObject var playback: PlaybackManager
     let onOpen: () -> Void
     let onSubtitleTiming: () -> Void
+    let onSubtitleSearch: () -> Void
 
     var body: some View {
         Menu {
@@ -544,6 +628,11 @@ private struct TracksMenu: View {
                 Text("No other audio or subtitles")
             }
             Divider()
+            Button {
+                onSubtitleSearch()
+            } label: {
+                Label("Search for subtitles…", systemImage: "magnifyingglass")
+            }
             Button {
                 onSubtitleTiming()
             } label: {

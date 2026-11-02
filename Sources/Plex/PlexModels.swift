@@ -27,6 +27,51 @@ struct FlexString: Codable, Hashable {
     }
 }
 
+/// Plex sends some flags as true/false and others as 0/1. This accepts either.
+struct FlexBool: Decodable, Hashable {
+    let value: Bool
+    init(from decoder: Decoder) throws {
+        let c = try decoder.singleValueContainer()
+        if let b = try? c.decode(Bool.self) { value = b }
+        else if let i = try? c.decode(Int.self) { value = i != 0 }
+        else if let s = try? c.decode(String.self) { value = s == "1" || s.lowercased() == "true" }
+        else { value = false }
+    }
+}
+
+/// A subtitle the Plex server found online (OpenSubtitles etc.).
+struct OnlineSubtitle: Decodable, Hashable, Identifiable {
+    let key: String?
+    let providerTitle: String?
+    let title: String?
+    let displayTitle: String?
+    let format: String?
+    let codec: String?
+    let languageCode: String?
+    let score: FlexString?
+    let perfectMatch: FlexBool?
+    let hearingImpaired: FlexBool?
+    let forced: FlexBool?
+
+    var id: String { key ?? UUID().uuidString }
+    var name: String { title ?? displayTitle ?? "Subtitle" }
+    var isPerfect: Bool { perfectMatch?.value ?? false }
+    var scoreValue: Double { Double(score?.value ?? "") ?? 0 }
+    var details: String {
+        var bits: [String] = []
+        if let p = providerTitle, !p.isEmpty { bits.append(p) }
+        if let f = (format ?? codec), !f.isEmpty { bits.append(f.uppercased()) }
+        if hearingImpaired?.value == true { bits.append("SDH") }
+        if forced?.value == true { bits.append("Forced") }
+        if let s = score?.value, !s.isEmpty { bits.append("match \(s)") }
+        return bits.joined(separator: "  ·  ")
+    }
+}
+
+struct OnlineSubtitleContainer: Decodable {
+    let Stream: [OnlineSubtitle]?
+}
+
 // MARK: - Containers
 
 struct PlexResponse<T: Decodable>: Decodable {
