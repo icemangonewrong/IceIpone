@@ -103,7 +103,10 @@ struct PlayableDetailView: View {
     }
 
     private func load() async {
-        if let fresh = try? await app.client.metadata(item.ratingKey.value) { full = fresh }
+        if let fresh = try? await app.client.metadata(item.ratingKey.value) {
+            full = fresh
+            playback.warm(fresh)
+        }
         if isEpisode, let season = d.parentRatingKey?.value {
             seasonEpisodes = (try? await app.client.children(of: season)) ?? []
         }
@@ -213,6 +216,7 @@ struct ShowDetailView: View {
         if let fresh = try? await app.client.metadata(key) { full = fresh }
         seasons = ((try? await app.client.children(of: key)) ?? []).filter { $0.type == "season" }
         next = try? await app.client.nextEpisode(showKey: key)
+        if let n = next { playback.warm(n) }
     }
 }
 

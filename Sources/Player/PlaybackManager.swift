@@ -85,6 +85,9 @@ final class PlaybackManager: NSObject, ObservableObject {
     /// The next episode's first ~20 seconds, fetched near the end of this one so it starts at once.
     private var preload: (key: String, proxy: StreamProxy, url: URL, item: PlexItem, after: PlexItem?)?
     private var preloadPending: String?
+    /// The video whose info page is open, ~10 s from where Play would start.
+    private var warmed: (key: String, proxy: StreamProxy, url: URL, item: PlexItem, after: PlexItem?)?
+    private var warmedAt: Double = 0
     private var mediaURL: URL?
     private var reportTimer: Timer?
     private var watchdog: Timer?
@@ -163,13 +166,23 @@ final class PlaybackManager: NSObject, ObservableObject {
 
         // Route through the on-phone cache when we know the file size (almost always).
         var url = remote
+        var fromInfoPage = false
+        if preload?.key != target.ratingKey.value, let w = warmed, w.key == target.ratingKey.value {
+            // Warmed up from its info page.
+            warmed = nil
+            preload = w
+            fromInfoPage = true
+        } else if let w = warmed {
+            warmed = nil
+            DispatchQueue.global(qos: .utility).async { w.proxy.stop() }
+        }
         if let pre = preload, pre.key == target.ratingKey.value {
             // Already preloaded: start from what's on the phone.
             preload = nil
             pre.proxy.promote()
             proxy = pre.proxy
             url = pre.url
-            preloadedExtras = (pre.key, pre.item, pre.after)
+            if !fromInfoPage { preloadedExtras = (pre.key, pre.item, pre.after) }
         } else if let pre = preload {
             preload = nil
             DispatchQueue.global(qos: .utility).async { pre.proxy.stop() }
@@ -199,6 +212,10 @@ final class PlaybackManager: NSObject, ObservableObject {
         if !reportOnly {
             showPlayerUI = false
             resetZoom()
+            if let w = warmed {
+                warmed = nil
+                DispatchQueue.global(qos: .utility).async { w.proxy.stop() }
+            }
             if let pre = preload {
                 preload = nil
                 DispatchQueue.global(qos: .utility).async { pre.proxy.stop() }
@@ -502,6 +519,35 @@ final class PlaybackManager: NSObject, ObservableObject {
     }
 
     // MARK: - Next-episode preload
+
+    /// An info page is open: fetch ~10 s from where Play would start, so it starts at once.
+    /// Skipped while something is playing, so it never takes that video's bandwidth.
+    func warm(_ item: PlexItem) {
+        if isActive && wantsPlay { return }
+        guard item.isPlayable, let remote = client.directURL(for: item), let size = item.firstPart?.size, size > 0,
+              let durMs = item.duration, durMs > 0 else { return }
+        let dur = Double(durMs) / 1000
+        var at = Double(item.viewOffset ?? 0) / 1000
+        if at > dur - 120 { at = 0 }
+        let key = item.ratingKey.value
+        if let w = warmed, w.key == key, abs(warmedAt - at) < 5 { return }
+        if let w = warmed {
+            warmed = nil
+            DispatchQueue.global(qos: .utility).async { w.proxy.stop() }
+        }
+        let p = StreamProxy(remote: remote, size: size, duration: dur, aheadSeconds: Double(state.bufferMinutes * 60),
+                            container: item.container, preloadSeconds: 10, preloadAt: at)
+        warmedAt = at
+        Task {
+            guard let local = try? await p.start() else {
+                DispatchQueue.global(qos: .utility).async { p.stop() }
+                return
+            }
+            if let old = warmed { DispatchQueue.global(qos: .utility).async { old.proxy.stop() } }
+            warmed = (key, p, local, item, nil)
+            p.setAllowed(true)
+        }
+    }
 
     private var preloadedExtras: (String, PlexItem, PlexItem?)?
 
