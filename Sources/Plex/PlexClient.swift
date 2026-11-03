@@ -201,7 +201,15 @@ final class PlexClient {
             URLQueryItem(name: "X-Plex-Container-Size", value: String(size)),
         ]
         if unwatchedOnly { q.append(URLQueryItem(name: "unwatched", value: "1")) }
-        let data = try await serverGET("/library/sections/\(section)/all", query: q)
+        let data: Data
+        do {
+            data = try await serverGET("/library/sections/\(section)/all", query: q)
+        } catch PlexError.badResponse(let code) where sort.hasPrefix("episode.") {
+            // Older servers without "newest episode" sorting: fall back to when the show was added.
+            _ = code
+            q[0] = URLQueryItem(name: "sort", value: "addedAt:desc")
+            data = try await serverGET("/library/sections/\(section)/all", query: q)
+        }
         let mc = try JSONDecoder().decode(PlexResponse<MetadataContainer>.self, from: data).MediaContainer
         return (mc.Metadata ?? [], mc.totalSize)
     }

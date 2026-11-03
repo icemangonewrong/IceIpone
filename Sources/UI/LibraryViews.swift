@@ -30,6 +30,7 @@ struct LibraryGridView: View {
 
     enum Sort: String, CaseIterable, Identifiable {
         case title = "titleSort"
+        case newestEpisode = "episode.addedAt:desc"
         case added = "addedAt:desc"
         case released = "originallyAvailableAt:desc"
         case lastViewed = "lastViewedAt:desc"
@@ -37,6 +38,7 @@ struct LibraryGridView: View {
         var label: String {
             switch self {
             case .title: return "Title"
+            case .newestEpisode: return "Newest episode"
             case .added: return "Recently added"
             case .released: return "Release date"
             case .lastViewed: return "Recently watched"
@@ -47,7 +49,14 @@ struct LibraryGridView: View {
     @State private var items: [PlexItem] = []
     @State private var total: Int?
     @State private var loading = false
-    @State private var sort: Sort = .title
+    @State private var sort: Sort
+
+    init(section: PlexSection, sort: Sort = .title) {
+        self.section = section
+        _sort = State(initialValue: sort)
+    }
+
+    private var sorts: [Sort] { Sort.allCases.filter { $0 != .newestEpisode || section.type == "show" } }
     @State private var unwatchedOnly = false
     @State private var error: String?
 
@@ -72,7 +81,7 @@ struct LibraryGridView: View {
         .toolbar {
             Menu {
                 Picker("Sort", selection: $sort) {
-                    ForEach(Sort.allCases) { Text($0.label).tag($0) }
+                    ForEach(sorts) { Text($0.label).tag($0) }
                 }
                 Toggle("Unwatched only", isOn: $unwatchedOnly)
             } label: {

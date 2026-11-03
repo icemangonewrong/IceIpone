@@ -27,6 +27,23 @@ struct FlexString: Codable, Hashable {
     }
 }
 
+/// A number Plex may send as a number or as text.
+struct FlexDouble: Decodable, Hashable {
+    let value: Double?
+    init(from decoder: Decoder) throws {
+        let c = try decoder.singleValueContainer()
+        if let d = try? c.decode(Double.self) { value = d }
+        else if let s = try? c.decode(String.self) { value = Double(s) }
+        else { value = nil }
+    }
+}
+
+/// One rating Plex lists for an item (IMDb, Rotten Tomatoes, TMDB…).
+struct PlexRatingEntry: Decodable, Hashable {
+    let image: String?
+    let value: FlexDouble?
+}
+
 /// Plex sends some flags as true/false and others as 0/1. This accepts either.
 struct FlexBool: Decodable, Hashable {
     let value: Bool
@@ -202,6 +219,9 @@ struct PlexItem: Decodable, Identifiable, Hashable {
     let contentRating: String?
     let audienceRating: Double?
     let rating: Double?
+    let audienceRatingImage: String?
+    let ratingImage: String?
+    let Rating: [PlexRatingEntry]?
     let tagline: String?
     let studio: String?
     let grandparentArt: String?
@@ -213,6 +233,14 @@ struct PlexItem: Decodable, Identifiable, Hashable {
     let Marker: [PlexMarker]?
 
     var id: String { ratingKey.value }
+
+    /// The IMDb score, when the server has one (library's ratings source set to IMDb, or listed in Rating).
+    var imdbRating: Double? {
+        if let r = Rating?.first(where: { ($0.image ?? "").hasPrefix("imdb://") }), let v = r.value?.value { return v }
+        if (audienceRatingImage ?? "").hasPrefix("imdb://"), let v = audienceRating { return v }
+        if (ratingImage ?? "").hasPrefix("imdb://"), let v = rating { return v }
+        return nil
+    }
 
     var isPlayable: Bool { type == "movie" || type == "episode" }
 
