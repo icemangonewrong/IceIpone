@@ -67,6 +67,9 @@ final class PlaybackManager: NSObject, ObservableObject {
     /// Subtitles start off (like Plex), whatever the file marks as default. These hold Plex's choice
     /// for this video and anything picked in the app, so a reopened player shows the same thing.
     private var pickedSubtitle: Int32?
+    /// English audio first, whatever the file marks as default (unless you pick a track yourself).
+    private var pickedAudio = false
+    private var audioCheckUntil = Date.distantPast
     private var plexEmbeddedSubtitle: Int?       // 1 = first subtitle track inside the file
     private var plexExternalSubtitle: URL?
     private var routeObserver: NSObjectProtocol?
@@ -152,6 +155,8 @@ final class PlaybackManager: NSObject, ObservableObject {
         skippedMarkers = []
         pendingSubtitles = []
         pickedSubtitle = nil
+        pickedAudio = false
+        audioCheckUntil = Date().addingTimeInterval(25)
         plexEmbeddedSubtitle = nil
         plexExternalSubtitle = nil
         subtitleDelayMs = 0
@@ -378,6 +383,7 @@ final class PlaybackManager: NSObject, ObservableObject {
     var currentSubtitleTrack: Int32 { vlc?.currentVideoSubTitleIndex ?? -1 }
 
     func selectAudioTrack(_ id: Int32) {
+        pickedAudio = true
         vlc?.currentAudioTrackIndex = id
         objectWillChange.send()
     }
@@ -409,6 +415,8 @@ final class PlaybackManager: NSObject, ObservableObject {
         media.addOption(":network-caching=1200")
         // Don't let VLC switch on a subtitle the file marks as default (we choose; see applySubtitleChoice).
         media.addOption(":sub-language=none")
+        // English audio first, whatever the file marks as default (VLC falls back to the default if none).
+        media.addOption(":audio-language=en,eng,English")
         if seconds > 1 { media.addOption(":start-time=\(Int(seconds))") }
         player.media = media
         vlc = player
@@ -514,7 +522,7 @@ final class PlaybackManager: NSObject, ObservableObject {
             restartVLC()
         }
         updateMarkers()
-        if hasPlayedSinceStart { applySubtitleChoice() }
+        if hasPlayedSinceStart { applySubtitleChoice(); preferEnglishAudio() }
         preloadNextIfNeeded()
     }
 
@@ -692,6 +700,20 @@ final class PlaybackManager: NSObject, ObservableObject {
             if chosen { rememberSubtitleWhenLoaded() }
         }
         objectWillChange.send()
+    }
+
+    /// Backup for audio-language: for the first seconds, switch to an English track if the file started
+    /// on another language and has one.
+    private func preferEnglishAudio() {
+        guard !pickedAudio, Date() < audioCheckUntil, let p = vlc else { return }
+        let ids = ((p.audioTrackIndexes as? [NSNumber]) ?? []).map { $0.int32Value }
+        let names = ((p.audioTrackNames as? [String]) ?? []).map { $0.lowercased() }
+        guard ids.count == names.count, let cur = ids.firstIndex(of: p.currentAudioTrackIndex) else { return }
+        if names[cur].contains("english") { return }
+        if let i = names.indices.first(where: { ids[$0] >= 0 && names[$0].contains("english") && !names[$0].contains("commentary") }) {
+            p.currentAudioTrackIndex = ids[i]
+            objectWillChange.send()
+        }
     }
 
     /// Marks "a subtitle you chose is being added; leave it alone until it's loaded".
