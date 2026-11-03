@@ -77,6 +77,9 @@ final class PlaybackManager: NSObject, ObservableObject {
 
     private var vlc: VLCMediaPlayer?
     private var proxy: StreamProxy?
+    /// The next episode's first ~20 seconds, fetched near the end of this one so it starts at once.
+    private var preload: (key: String, proxy: StreamProxy, url: URL, item: PlexItem, after: PlexItem?)?
+    private var preloadPending: String?
     private var mediaURL: URL?
     private var reportTimer: Timer?
     private var watchdog: Timer?
@@ -152,7 +155,18 @@ final class PlaybackManager: NSObject, ObservableObject {
 
         // Route through the on-phone cache when we know the file size (almost always).
         var url = remote
-        if let size = target.firstPart?.size, size > 0, duration > 0 {
+        if let pre = preload, pre.key == target.ratingKey.value {
+            // Already preloaded: start from what's on the phone.
+            preload = nil
+            pre.proxy.promote()
+            proxy = pre.proxy
+            url = pre.url
+            preloadedExtras = (pre.key, pre.item, pre.after)
+        } else if let pre = preload {
+            preload = nil
+            DispatchQueue.global(qos: .utility).async { pre.proxy.stop() }
+        }
+        if proxy == nil, let size = target.firstPart?.size, size > 0, duration > 0 {
             let p = StreamProxy(remote: remote, size: size, duration: duration,
                                 aheadSeconds: Double(state.bufferMinutes * 60),
                                 container: target.container)
@@ -174,7 +188,14 @@ final class PlaybackManager: NSObject, ObservableObject {
 
     /// Stops playback and saves the position to Plex.
     func stop(reportOnly: Bool = false) async {
-        if !reportOnly { showPlayerUI = false; resetZoom() }
+        if !reportOnly {
+            showPlayerUI = false
+            resetZoom()
+            if let pre = preload {
+                preload = nil
+                DispatchQueue.global(qos: .utility).async { pre.proxy.stop() }
+            }
+        }
         guard isActive, let item = current else {
             isActive = false
             return
@@ -463,6 +484,48 @@ final class PlaybackManager: NSObject, ObservableObject {
             restartVLC()
         }
         updateMarkers()
+        preloadNextIfNeeded()
+    }
+
+    // MARK: - Next-episode preload
+
+    private var preloadedExtras: (String, PlexItem, PlexItem?)?
+
+    /// With 5 minutes or less left, fetch the first ~20 s of the next episode so it starts at once.
+    /// Only while this episode has a comfortable cushion loaded, so it never stalls the one you're watching.
+    private func preloadNextIfNeeded() {
+        guard let next = nextItem, let item = current, hasPlayedSinceStart, duration > 0,
+              duration - currentTime <= 300 else { return }
+        let key = next.ratingKey.value
+        if let pre = preload, pre.key == key {
+            let left = duration - currentTime
+            pre.proxy.setAllowed(bufferedAhead >= min(60, max(left - 2, 0)))
+            return
+        }
+        guard preloadPending != key else { return }
+        preloadPending = key
+        let c = client
+        let minutes = state.bufferMinutes
+        Task {
+            defer { if preloadPending == key { preloadPending = nil } }
+            let full = (try? await c.details(key)) ?? next
+            let after = try? await c.episode(adjacentTo: full, offset: 1)
+            guard current?.ratingKey == item.ratingKey, nextItem?.ratingKey.value == key,
+                  let remote = c.directURL(for: full), let size = full.firstPart?.size, size > 0,
+                  let dur = full.duration, dur > 0 else { return }
+            let p = StreamProxy(remote: remote, size: size, duration: Double(dur) / 1000,
+                                aheadSeconds: Double(minutes * 60), container: full.container, preloadSeconds: 20)
+            guard let local = try? await p.start() else {
+                DispatchQueue.global(qos: .utility).async { p.stop() }
+                return
+            }
+            guard current?.ratingKey == item.ratingKey, nextItem?.ratingKey.value == key else {
+                DispatchQueue.global(qos: .utility).async { p.stop() }
+                return
+            }
+            if let old = preload { DispatchQueue.global(qos: .utility).async { old.proxy.stop() } }
+            preload = (key, p, local, full, after)
+        }
     }
 
     private func reportNow() {
@@ -534,9 +597,12 @@ final class PlaybackManager: NSObject, ObservableObject {
 
     private func fetchExtras(for item: PlexItem) {
         let c = client
+        let early = preloadedExtras?.0 == item.ratingKey.value ? preloadedExtras : nil
+        preloadedExtras = nil
         Task {
-            let full = try? await c.details(item.ratingKey.value)
-            let next = item.type == "episode" ? (try? await c.episode(adjacentTo: item, offset: 1)) : nil
+            let full = early != nil ? early?.1 : try? await c.details(item.ratingKey.value)
+            let next = early != nil ? early?.2
+                : (item.type == "episode" ? (try? await c.episode(adjacentTo: item, offset: 1)) : nil)
             guard let current, current.ratingKey == item.ratingKey else { return }
             markers = (full?.Marker ?? []).filter { $0.isIntro || $0.isCredits }
             nextItem = next

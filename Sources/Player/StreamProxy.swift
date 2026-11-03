@@ -24,7 +24,14 @@ final class StreamProxy: NSObject, URLSessionDataDelegate {
     private let size: Int64
     private let mime: String
     let bytesPerSecond: Double
-    private let aheadLimit: Int64
+    private var aheadLimit: Int64
+    private let fullAheadLimit: Int64
+    /// Preload mode: only the first `aheadLimit` bytes (and the last few MB) are fetched, and only
+    /// while allowed, until `promote()` turns it into the normal cache for the playing video.
+    private var preloading = false
+    private var hold = false
+    private var tailFetched = false
+    private let tailBytes: Int64 = 4 * 1024 * 1024
     private let behindLimit: Int64 = 300 * 1024 * 1024     // keep ~300 MB behind for rewinding
     private let chunkSize: Int64 = 4 * 1024 * 1024
     private let sendSize: Int64 = 512 * 1024
@@ -63,7 +70,8 @@ final class StreamProxy: NSObject, URLSessionDataDelegate {
 
     /// - Parameters:
     ///   - aheadSeconds: how much video to keep loaded ahead of the player.
-    init(remote: URL, size: Int64, duration: Double, aheadSeconds: Double, container: String?) {
+    init(remote: URL, size: Int64, duration: Double, aheadSeconds: Double, container: String?,
+         preloadSeconds: Double? = nil) {
         self.remote = remote
         self.size = size
         self.bytesPerSecond = max(Double(size) / max(duration, 1), 50_000)
@@ -79,7 +87,14 @@ final class StreamProxy: NSObject, URLSessionDataDelegate {
         var wanted = Int64(bytesPerSecond * max(aheadSeconds, 60))
         let free = StreamProxy.freeSpace()
         if free > 0 { wanted = min(wanted, max(free - 2_000_000_000, 200_000_000)) }
-        aheadLimit = min(wanted, 12_000_000_000)
+        fullAheadLimit = min(wanted, 12_000_000_000)
+        if let pre = preloadSeconds {
+            preloading = true
+            hold = true
+            aheadLimit = min(max(Int64(bytesPerSecond * pre * 1.1), 4_000_000), 80_000_000, size)
+        } else {
+            aheadLimit = fullAheadLimit
+        }
 
         dir = StreamProxy.cacheRoot.appendingPathComponent("stream-" + UUID().uuidString, isDirectory: true)
         super.init()
@@ -144,8 +159,8 @@ final class StreamProxy: NSObject, URLSessionDataDelegate {
         guard port != 0, let url = URL(string: "http://127.0.0.1:\(port)/media") else {
             throw URLError(.cannotConnectToHost)
         }
-        // Start filling the cache right away.
-        q.async { self.runDownload(from: 0) }
+        // Start filling the cache right away (a preload waits until it's allowed).
+        q.async { if !self.hold { self.runDownload(from: 0) } }
         return url
     }
 
@@ -165,6 +180,40 @@ final class StreamProxy: NSObject, URLSessionDataDelegate {
             writeHandle = nil
         }
         try? FileManager.default.removeItem(at: dir)
+    }
+
+    /// Preload only: let it download (true) or hold it so the playing video gets the bandwidth (false).
+    func setAllowed(_ on: Bool) {
+        q.async {
+            guard self.preloading, !self.stopped, self.hold == on else { return }
+            self.hold = !on
+            if on {
+                if let t = self.task, self.paused { t.resume(); self.paused = false }
+                else if self.task == nil, self.available(from: 0) < self.aheadLimit { self.runDownload(from: 0) }
+                else if self.task == nil { self.fetchTailIfNeeded() }
+            } else if let t = self.task, !self.paused {
+                t.suspend()
+                self.paused = true
+            }
+        }
+    }
+
+    /// The preloaded video is now playing: become its normal cache.
+    func promote() {
+        q.async {
+            guard self.preloading else { return }
+            self.preloading = false
+            self.hold = false
+            self.aheadLimit = self.fullAheadLimit
+            if let t = self.task, self.paused { t.resume(); self.paused = false }
+        }
+    }
+
+    private func fetchTailIfNeeded() {
+        let ts = size - tailBytes
+        guard !tailFetched, ts > aheadLimit else { return }
+        tailFetched = true
+        runDownload(from: ts)
     }
 
     func snapshot() -> Snapshot {
@@ -326,6 +375,19 @@ final class StreamProxy: NSObject, URLSessionDataDelegate {
 
     private func throttle() {
         guard let t = task else { return }
+        if preloading {
+            if hold {
+                if !paused { t.suspend(); paused = true }
+                return
+            }
+            // First part done: stop there and grab the end of the file (some formats keep their index there).
+            if taskStart < aheadLimit && downloadPos >= aheadLimit {
+                t.cancel()
+                task = nil
+                fetchTailIfNeeded()
+            }
+            return
+        }
         let ahead = downloadPos - readPos
         if !paused && ahead > aheadLimit {
             t.suspend()
