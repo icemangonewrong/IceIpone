@@ -198,6 +198,16 @@ final class StreamProxy: NSObject, URLSessionDataDelegate {
         }
     }
 
+    /// Last minutes of the video: keep downloading all the way to the end, whatever the buffer setting.
+    func loadToEnd() {
+        q.async {
+            guard !self.preloading, !self.stopped, self.aheadLimit < self.size else { return }
+            self.aheadLimit = self.size
+            if let t = self.task, self.paused { t.resume(); self.paused = false }
+            else if self.task == nil, !self.retryPending { self.runDownload(from: self.readPos) }
+        }
+    }
+
     /// The preloaded video is now playing: become its normal cache.
     func promote() {
         q.async {

@@ -508,12 +508,15 @@ final class PlaybackManager: NSObject, ObservableObject {
     /// With 5 minutes or less left, fetch the first ~20 s of the next episode so it starts at once.
     /// Only while this episode has a comfortable cushion loaded, so it never stalls the one you're watching.
     private func preloadNextIfNeeded() {
-        guard let next = nextItem, let item = current, hasPlayedSinceStart, duration > 0,
-              duration - currentTime <= 300 else { return }
+        guard let item = current, hasPlayedSinceStart, duration > 0, duration - currentTime <= 300 else { return }
+        let left = duration - currentTime
+        // Last 5 minutes: keep loading this episode all the way to its end, whatever the buffer setting.
+        proxy?.loadToEnd()
+        guard let next = nextItem else { return }
         let key = next.ratingKey.value
         if let pre = preload, pre.key == key {
-            let left = duration - currentTime
-            pre.proxy.setAllowed(bufferedAhead >= min(60, max(left - 2, 0)))
+            // The next episode only loads once this one is loaded to the end, so it never takes its bandwidth.
+            pre.proxy.setAllowed(bufferedAhead >= max(left - 2, 0))
             return
         }
         guard preloadPending != key else { return }
@@ -624,10 +627,7 @@ final class PlaybackManager: NSObject, ObservableObject {
             pendingSubtitles = streams.filter { $0.isExternalSubtitle }.compactMap { s in
                 s.key.flatMap { c.streamURL($0) }
             }
-            let embedded = streams.filter { $0.streamType == 3 && $0.key == nil }
-            plexEmbeddedSubtitle = embedded.firstIndex(where: { $0.isSelected }).map { $0 + 1 }
-            plexExternalSubtitle = streams.first(where: { $0.isExternalSubtitle && $0.isSelected })
-                .flatMap { $0.key }.flatMap { c.streamURL($0) }
+            // Subtitles stay off until you turn one on here (Plex's per-video choice isn't used).
             if hasPlayedSinceStart {
                 applySubtitleChoice()
                 addPendingSubtitles()
