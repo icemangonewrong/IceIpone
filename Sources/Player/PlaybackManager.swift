@@ -390,6 +390,8 @@ final class PlaybackManager: NSObject, ObservableObject {
         let media = VLCMedia(url: url)
         // The cache server is local, so VLC itself only needs a short buffer; starts fast.
         media.addOption(":network-caching=1200")
+        // Don't let VLC switch on a subtitle the file marks as default (we choose; see applySubtitleChoice).
+        media.addOption(":sub-language=none")
         if seconds > 1 { media.addOption(":start-time=\(Int(seconds))") }
         player.media = media
         vlc = player
@@ -495,6 +497,7 @@ final class PlaybackManager: NSObject, ObservableObject {
             restartVLC()
         }
         updateMarkers()
+        if hasPlayedSinceStart { applySubtitleChoice() }
         preloadNextIfNeeded()
     }
 
@@ -638,32 +641,46 @@ final class PlaybackManager: NSObject, ObservableObject {
         pendingSubtitles = []
         for url in subs {
             let chosen = pickedSubtitle == nil && url == plexExternalSubtitle
+            if chosen { pickedSubtitle = Self.subtitleLoading }
             _ = vlc.addPlaybackSlave(url, type: .subtitle, enforce: chosen)
-            if chosen {
-                // Remember VLC's number for it once it's loaded, so it stays on.
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
-                    guard let self, self.pickedSubtitle == nil, let id = self.vlc?.currentVideoSubTitleIndex, id >= 0 else { return }
-                    self.pickedSubtitle = id
-                }
-            }
+            if chosen { rememberSubtitleWhenLoaded() }
         }
         objectWillChange.send()
     }
 
+    /// Marks "a subtitle you chose is being added; leave it alone until it's loaded".
+    private static let subtitleLoading: Int32 = -2
+
+    /// After adding a subtitle that should be on, remember VLC's number for it so it stays on.
+    private func rememberSubtitleWhenLoaded() {
+        Task { @MainActor [weak self] in
+            for _ in 0..<10 {
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                guard let self, self.pickedSubtitle == Self.subtitleLoading else { return }
+                if let id = self.vlc?.currentVideoSubTitleIndex, id >= 0 { self.pickedSubtitle = id; return }
+            }
+            if let self, self.pickedSubtitle == Self.subtitleLoading { self.pickedSubtitle = nil }
+        }
+    }
+
     /// Subtitles off unless you picked one here or in Plex (files can mark a track as default; Plex ignores that).
+    /// Checked every second while playing, because VLC can switch a default-marked track on a moment after it starts.
     private func applySubtitleChoice() {
         guard let p = vlc else { return }
         let ids = ((p.videoSubTitlesIndexes as? [NSNumber]) ?? []).map { $0.int32Value }.filter { $0 >= 0 }
         var want: Int32 = -1
         if let picked = pickedSubtitle {
+            if picked == Self.subtitleLoading { return }
             want = picked
         } else if let n = plexEmbeddedSubtitle, n <= ids.count {
             want = ids[n - 1]
-        } else if plexExternalSubtitle != nil {
+        } else if let ext = plexExternalSubtitle, pendingSubtitles.contains(ext) {
             return   // it gets switched on when it's added
         }
-        if p.currentVideoSubTitleIndex != want { p.currentVideoSubTitleIndex = want }
-        objectWillChange.send()
+        if p.currentVideoSubTitleIndex != want {
+            p.currentVideoSubTitleIndex = want
+            objectWillChange.send()
+        }
     }
 
     private func updateMarkers() {
@@ -789,11 +806,11 @@ final class PlaybackManager: NSObject, ObservableObject {
                     showToast("The server didn't get those subtitles. Try another one.")
                     return
                 }
+                pickedSubtitle = Self.subtitleLoading
                 _ = vlc?.addPlaybackSlave(url, type: .subtitle, enforce: true)
+                rememberSubtitleWhenLoaded()
                 objectWillChange.send()
                 showToast("Subtitles: \(sub.name)")
-                try? await Task.sleep(nanoseconds: 1_500_000_000)
-                if let id = vlc?.currentVideoSubTitleIndex, id >= 0 { pickedSubtitle = id }
             } catch {
                 if current?.ratingKey.value == key { showToast("Couldn't download: \(error.localizedDescription)") }
             }
