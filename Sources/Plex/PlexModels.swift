@@ -151,6 +151,9 @@ struct PlexStream: Decodable, Hashable {
     let displayTitle: String?
     let title: String?
     let forced: Bool?
+    let selected: FlexBool?
+
+    var isSelected: Bool { selected?.value ?? false }
 
     /// A subtitle file stored next to the video (.srt etc.), as opposed to one inside it.
     var isExternalSubtitle: Bool { streamType == 3 && key != nil }

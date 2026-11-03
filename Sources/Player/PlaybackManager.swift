@@ -64,6 +64,11 @@ final class PlaybackManager: NSObject, ObservableObject {
     private var upNextDeadline: Date?
     private var skippedMarkers = Set<Double>()
     private var pendingSubtitles: [URL] = []
+    /// Subtitles start off (like Plex), whatever the file marks as default. These hold Plex's choice
+    /// for this video and anything picked in the app, so a reopened player shows the same thing.
+    private var pickedSubtitle: Int32?
+    private var plexEmbeddedSubtitle: Int?       // 1 = first subtitle track inside the file
+    private var plexExternalSubtitle: URL?
     private var routeObserver: NSObjectProtocol?
     private var toastTask: Task<Void, Never>?
 
@@ -143,6 +148,9 @@ final class PlaybackManager: NSObject, ObservableObject {
         upNextCancelled = false
         skippedMarkers = []
         pendingSubtitles = []
+        pickedSubtitle = nil
+        plexEmbeddedSubtitle = nil
+        plexExternalSubtitle = nil
         subtitleDelayMs = 0
         duration = Double(target.duration ?? 0) / 1000
         var resume = fromStart ? 0 : Double(target.viewOffset ?? 0) / 1000
@@ -358,6 +366,7 @@ final class PlaybackManager: NSObject, ObservableObject {
     }
 
     func selectSubtitleTrack(_ id: Int32) {
+        pickedSubtitle = id
         vlc?.currentVideoSubTitleIndex = id
         objectWillChange.send()
     }
@@ -426,6 +435,8 @@ final class PlaybackManager: NSObject, ObservableObject {
             applyDelays(to: p)   // also after reconnecting from a dead zone (new player)
             hasPlayedSinceStart = true
             restartsWithoutPlaying = 0
+            applySubtitleChoice()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in self?.applySubtitleChoice() }
             addPendingSubtitles()
             if !wantsPlay || heldForMotion { p.pause() }
             if duration <= 0, let len = p.media?.length.intValue, len > 0 { duration = Double(len) / 1000 }
@@ -610,7 +621,14 @@ final class PlaybackManager: NSObject, ObservableObject {
             pendingSubtitles = streams.filter { $0.isExternalSubtitle }.compactMap { s in
                 s.key.flatMap { c.streamURL($0) }
             }
-            if hasPlayedSinceStart { addPendingSubtitles() }
+            let embedded = streams.filter { $0.streamType == 3 && $0.key == nil }
+            plexEmbeddedSubtitle = embedded.firstIndex(where: { $0.isSelected }).map { $0 + 1 }
+            plexExternalSubtitle = streams.first(where: { $0.isExternalSubtitle && $0.isSelected })
+                .flatMap { $0.key }.flatMap { c.streamURL($0) }
+            if hasPlayedSinceStart {
+                applySubtitleChoice()
+                addPendingSubtitles()
+            }
         }
     }
 
@@ -619,8 +637,32 @@ final class PlaybackManager: NSObject, ObservableObject {
         let subs = pendingSubtitles
         pendingSubtitles = []
         for url in subs {
-            _ = vlc.addPlaybackSlave(url, type: .subtitle, enforce: false)
+            let chosen = pickedSubtitle == nil && url == plexExternalSubtitle
+            _ = vlc.addPlaybackSlave(url, type: .subtitle, enforce: chosen)
+            if chosen {
+                // Remember VLC's number for it once it's loaded, so it stays on.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+                    guard let self, self.pickedSubtitle == nil, let id = self.vlc?.currentVideoSubTitleIndex, id >= 0 else { return }
+                    self.pickedSubtitle = id
+                }
+            }
         }
+        objectWillChange.send()
+    }
+
+    /// Subtitles off unless you picked one here or in Plex (files can mark a track as default; Plex ignores that).
+    private func applySubtitleChoice() {
+        guard let p = vlc else { return }
+        let ids = ((p.videoSubTitlesIndexes as? [NSNumber]) ?? []).map { $0.int32Value }.filter { $0 >= 0 }
+        var want: Int32 = -1
+        if let picked = pickedSubtitle {
+            want = picked
+        } else if let n = plexEmbeddedSubtitle, n <= ids.count {
+            want = ids[n - 1]
+        } else if plexExternalSubtitle != nil {
+            return   // it gets switched on when it's added
+        }
+        if p.currentVideoSubTitleIndex != want { p.currentVideoSubTitleIndex = want }
         objectWillChange.send()
     }
 
@@ -750,6 +792,8 @@ final class PlaybackManager: NSObject, ObservableObject {
                 _ = vlc?.addPlaybackSlave(url, type: .subtitle, enforce: true)
                 objectWillChange.send()
                 showToast("Subtitles: \(sub.name)")
+                try? await Task.sleep(nanoseconds: 1_500_000_000)
+                if let id = vlc?.currentVideoSubTitleIndex, id >= 0 { pickedSubtitle = id }
             } catch {
                 if current?.ratingKey.value == key { showToast("Couldn't download: \(error.localizedDescription)") }
             }
