@@ -3,6 +3,32 @@ import SwiftUI
 // MARK: - Router
 
 /// Opens the right info page for a movie, episode, show or season.
+/// Opens a show or season from just its key (e.g. the show name under an episode poster).
+struct LoadItemView: View {
+    @EnvironmentObject var app: AppState
+    let key: String
+    @State private var item: PlexItem?
+    @State private var failed = false
+
+    var body: some View {
+        Group {
+            if let item {
+                ItemDetailView(item: item)
+            } else if failed {
+                Text("Couldn't load this.").foregroundColor(.secondary)
+            } else {
+                ProgressView()
+            }
+        }
+        .onAppear {
+            guard item == nil else { return }
+            Task { @MainActor in
+                if let it = try? await app.client.metadata(key) { item = it } else { failed = true }
+            }
+        }
+    }
+}
+
 struct ItemDetailView: View {
     let item: PlexItem
 
@@ -87,11 +113,33 @@ struct PlayableDetailView: View {
             }
             VStack(alignment: .leading, spacing: 6) {
                 if isEpisode {
-                    Text(d.grandparentTitle ?? "").font(.subheadline.weight(.semibold)).foregroundColor(Color.ice)
+                    if let show = d.showKey {
+                        NavigationLink(destination: LoadItemView(key: show)) {
+                            HStack(spacing: 4) {
+                                Text(d.grandparentTitle ?? "").font(.subheadline.weight(.semibold))
+                                Image(systemName: "chevron.right").font(.caption2.bold())
+                            }
+                            .foregroundColor(Color.ice)
+                        }
+                        .plainButton()
+                    } else {
+                        Text(d.grandparentTitle ?? "").font(.subheadline.weight(.semibold)).foregroundColor(Color.ice)
+                    }
                 }
                 Text(d.title ?? "").font(.title.bold()).fixedSize(horizontal: false, vertical: true)
                 if isEpisode, let s = d.parentIndex, let e = d.index {
-                    Text("Season \(s) · Episode \(e)").foregroundColor(.secondary)
+                    if let season = d.seasonKey {
+                        NavigationLink(destination: LoadItemView(key: season)) {
+                            HStack(spacing: 4) {
+                                Text("Season \(s) · Episode \(e)")
+                                Image(systemName: "chevron.right").font(.caption2.bold())
+                            }
+                            .foregroundColor(.secondary)
+                        }
+                        .plainButton()
+                    } else {
+                        Text("Season \(s) · Episode \(e)").foregroundColor(.secondary)
+                    }
                 }
                 MetaLine(item: d)
                 if let genres = d.Genre, !genres.isEmpty {
@@ -246,6 +294,12 @@ struct SeasonDetailView: View {
                     }
                 }
                 .listRowBackground(Color.clear)
+                if let show = d.parentRatingKey?.value {
+                    NavigationLink(destination: LoadItemView(key: show)) {
+                        Label("All seasons of \(d.parentTitle ?? "this show")", systemImage: "square.stack")
+                    }
+                    .listRowBackground(Color.clear)
+                }
                 WatchedButton(item: d, working: $working) { await load() }
                     .listRowBackground(Color.clear)
             }

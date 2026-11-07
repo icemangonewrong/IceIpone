@@ -247,6 +247,16 @@ struct PlexItem: Decodable, Identifiable, Hashable {
 
     var isPlayable: Bool { type == "movie" || type == "episode" }
 
+    /// The show an episode or season belongs to.
+    var showKey: String? {
+        if type == "episode" { return grandparentRatingKey?.value }
+        if type == "season" { return parentRatingKey?.value }
+        return nil
+    }
+
+    /// The season an episode belongs to.
+    var seasonKey: String? { type == "episode" ? parentRatingKey?.value : nil }
+
     /// Title line shown under a poster.
     var displayTitle: String {
         if type == "episode", let show = grandparentTitle { return show }

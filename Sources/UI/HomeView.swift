@@ -83,13 +83,40 @@ struct ItemTile: View {
     let item: PlexItem
     let width: CGFloat
 
+    // Like Plex: the picture opens the item; under an episode the show name opens the show (all seasons) and
+    // "S2 · E5" opens that season's episodes; under a season the show name opens the show.
     var body: some View {
-        NavigationLink(destination: ItemDetailView(item: item)) { tileBody }
-            .plainButton()
+        VStack(alignment: .leading, spacing: 4) {
+            NavigationLink(destination: ItemDetailView(item: item)) { poster }
+                .plainButton()
+            if item.type == "episode", let show = item.showKey {
+                NavigationLink(destination: LoadItemView(key: show)) { titleText }.plainButton()
+            } else {
+                NavigationLink(destination: ItemDetailView(item: item)) { titleText }.plainButton()
+            }
+            if let sub = item.displaySubtitle {
+                let to = item.type == "episode" ? item.seasonKey : (item.type == "season" ? item.showKey : nil)
+                if let key = to {
+                    NavigationLink(destination: LoadItemView(key: key)) { subText(sub) }.plainButton()
+                } else {
+                    NavigationLink(destination: ItemDetailView(item: item)) { subText(sub) }.plainButton()
+                }
+            }
+        }
+        .frame(width: width)
     }
 
-    private var tileBody: some View {
-        VStack(alignment: .leading, spacing: 4) {
+    private var titleText: some View {
+        Text(item.displayTitle).font(.caption.bold()).lineLimit(1).foregroundColor(.white)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func subText(_ s: String) -> some View {
+        Text(s).font(.caption2).foregroundColor(.secondary).lineLimit(1)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var poster: some View {
             PosterImage(path: item.posterPath, width: width)
                 .overlayCompat(alignment: .bottom) {
                     if let p = item.progress {
@@ -121,14 +148,6 @@ struct ItemTile: View {
                             .padding(4)
                     }
                 }
-            Text(item.displayTitle)
-                .font(.caption.bold())
-                .lineLimit(1)
-            if let sub = item.displaySubtitle {
-                Text(sub).font(.caption2).foregroundColor(.secondary).lineLimit(1)
-            }
-        }
-        .frame(width: width)
     }
 }
 
