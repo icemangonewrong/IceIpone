@@ -32,7 +32,7 @@ func shortDate(_ s: String) -> String {
 }
 
 /// Per requested season: which episodes are in Plex, which are out but not here, which aren't out yet.
-func tvProgress(_ app: AppState, _ r: SeerrRequest) async -> [SeasonProgress] {
+@MainActor func tvProgress(_ app: AppState, _ r: SeerrRequest) async -> [SeasonProgress] {
     guard let sr = seerr(app) else { return [] }
     var have = Set<String>()
     if let rk = r.ratingKey, let eps = try? await app.client.allEpisodes(showKey: rk) {

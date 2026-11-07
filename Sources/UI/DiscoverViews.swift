@@ -8,7 +8,7 @@ let imdbYellow = Color(red: 0.96, green: 0.77, blue: 0.09)
 let libGreen = Color(red: 0.13, green: 0.64, blue: 0.28)
 let reqAmber = Color(red: 0.85, green: 0.54, blue: 0.0)
 
-func seerr(_ app: AppState) -> SeerrClient? { SeerrClient.shared(app.token) }
+@MainActor func seerr(_ app: AppState) -> SeerrClient? { SeerrClient.shared(app.token) }
 
 struct IMDbBadge: View {
     let score: Double
