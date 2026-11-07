@@ -9,7 +9,8 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
     func application(_ application: UIApplication,
                      didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
         CrashNote.install()
-        try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
+        // Long-form video: the AirPlay menu offers Apple TVs first, like the TV and YouTube apps.
+        try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback, policy: .longFormVideo)
         StreamProxy.cleanUpOldCaches()
         return true
     }

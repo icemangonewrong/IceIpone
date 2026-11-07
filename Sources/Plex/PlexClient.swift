@@ -340,6 +340,59 @@ final class PlexClient {
     }
 
     /// Direct-play address of the original file (no server-side conversion at all).
+    /// For AirPlay: Plex repackages the video as a stream Apple TV can play (copying the picture and sound as they
+    /// are when it can, converting only what it must). Subtitles follow what's picked in Plex (off unless chosen).
+    func castURL(for item: PlexItem, session: String) -> URL? {
+        guard let server else { return nil }
+        var comps = URLComponents(string: server.baseURL + "/video/:/transcode/universal/start.m3u8")
+        comps?.queryItems = [
+            URLQueryItem(name: "path", value: "/library/metadata/\(item.ratingKey.value)"),
+            URLQueryItem(name: "mediaIndex", value: "0"),
+            URLQueryItem(name: "partIndex", value: "0"),
+            URLQueryItem(name: "protocol", value: "hls"),
+            URLQueryItem(name: "fastSeek", value: "1"),
+            URLQueryItem(name: "directPlay", value: "0"),
+            URLQueryItem(name: "directStream", value: "1"),
+            URLQueryItem(name: "directStreamAudio", value: "1"),
+            URLQueryItem(name: "videoQuality", value: "100"),
+            URLQueryItem(name: "maxVideoBitrate", value: "200000"),
+            URLQueryItem(name: "videoResolution", value: "3840x2160"),
+            URLQueryItem(name: "session", value: session),
+            URLQueryItem(name: "X-Plex-Session-Identifier", value: session),
+            URLQueryItem(name: "X-Plex-Client-Identifier", value: clientIdentifier),
+            URLQueryItem(name: "X-Plex-Product", value: Self.product),
+            URLQueryItem(name: "X-Plex-Platform", value: "iOS"),
+            URLQueryItem(name: "X-Plex-Device", value: "iPhone"),
+            URLQueryItem(name: "X-Plex-Token", value: server.accessToken),
+        ]
+        return comps?.url
+    }
+
+    func stopCast(session: String) async {
+        _ = try? await serverGET("/video/:/transcode/universal/stop", query: [URLQueryItem(name: "session", value: session)])
+    }
+
+    /// Before AirPlay: if Plex has a non-English audio track picked for this video, pick the English one
+    /// (AirPlay plays whatever Plex has picked).
+    func preferEnglishAudio(_ item: PlexItem) async {
+        guard let server else { return }
+        var part = item.firstPart
+        if part?.Stream == nil, let full = try? await details(item.ratingKey.value) { part = full.firstPart }
+        guard let part, let partID = part.id else { return }
+        let audio = (part.Stream ?? []).filter { $0.streamType == 2 }
+        guard audio.count > 1 else { return }
+        let isEnglish: (PlexStream) -> Bool = { s in
+            ["eng", "en"].contains((s.languageCode ?? "").lowercased()) || (s.language ?? "").lowercased() == "english"
+        }
+        let picked = audio.first { $0.isSelected } ?? audio.first
+        if let picked, isEnglish(picked) { return }
+        guard let eng = audio.first(where: isEnglish), let sid = eng.id,
+              var comps = URLComponents(string: server.baseURL + "/library/parts/\(partID)") else { return }
+        comps.queryItems = [URLQueryItem(name: "audioStreamID", value: String(sid)), URLQueryItem(name: "allParts", value: "1")]
+        guard let url = comps.url else { return }
+        _ = try? await send(request(url, method: "PUT", token: server.accessToken))
+    }
+
     func directURL(for item: PlexItem) -> URL? {
         guard let server, let partKey = item.firstPart?.key else { return nil }
         var comps = URLComponents(string: server.baseURL + partKey)

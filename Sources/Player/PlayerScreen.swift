@@ -1,5 +1,20 @@
 import SwiftUI
 import UIKit
+import AVKit
+
+/// Apple's AirPlay button: lists Apple TVs, AirPlay TVs and speakers. Picking one moves the video there.
+struct AirPlayButton: UIViewRepresentable {
+    func makeUIView(context: Context) -> AVRoutePickerView {
+        let v = AVRoutePickerView()
+        v.prioritizesVideoDevices = true
+        v.tintColor = .white
+        v.activeTintColor = UIColor(Color.ice)
+        v.backgroundColor = .clear
+        return v
+    }
+
+    func updateUIView(_ v: AVRoutePickerView, context: Context) {}
+}
 
 /// Full-screen player on the phone. When video is on the car screen, shows remote controls instead.
 struct PlayerScreen: View {
@@ -59,6 +74,18 @@ private struct PlayerView: View {
                     .onTapGesture(count: 2) { playback.zoomStepTap(in: geo.size) }
                     .onTapGesture { tapped() }
                     .simultaneousGesture(pinchGesture(geo.size))
+
+                if let tv = playback.castingTo {
+                    VStack(spacing: 14) {
+                        Image(systemName: "airplayvideo").font(.system(size: 60, weight: .light)).foregroundColor(Color.ice)
+                        Text("Playing on \(tv)").font(.title3.bold())
+                        Text("Use these controls or the TV remote. Tap the AirPlay button to bring it back to the phone.")
+                            .font(.footnote).foregroundColor(.white.opacity(0.7)).multilineTextAlignment(.center)
+                            .padding(.horizontal, 40)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .allowsHitTesting(false)
+                }
 
                 Group {
                     if playback.waitingForSignal {
@@ -121,6 +148,13 @@ private struct PlayerView: View {
                         .padding(.top, 8)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                         .transition(.opacity)
+                    AirPlayButton()
+                        .frame(width: 44, height: 44)
+                        .bg(.black.opacity(0.45), Circle())
+                        .padding(.trailing, 16)
+                        .padding(.top, 8)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                        .transition(.opacity)
                     bar(compact: compact)
                         .transition(.opacity)
                 }
@@ -134,6 +168,9 @@ private struct PlayerView: View {
         .foregroundColor(.white)
         .onAppear { scheduleHide() }
         .onChange(of: playback.isPlaying) { _ in scheduleHide() }
+        .onChange(of: playback.castingTo) { tv in
+            if tv != nil { hideTask?.cancel(); withAnimation { controlsVisible = true } } else { scheduleHide() }
+        }
         .sheet(isPresented: $showAudioDelay, onDismiss: scheduleHide) {
             AdjustSheet(title: "Audio delay",
                         note: "For \(playback.audioOutputName). Saved for this device and used automatically whenever it's connected.",
@@ -348,7 +385,7 @@ private struct PlayerView: View {
 
     private func scheduleHide() {
         hideTask?.cancel()
-        guard playback.isPlaying else { return }
+        guard playback.isPlaying, playback.castingTo == nil else { return }   // casting: keep the remote up
         hideTask = Task {
             try? await Task.sleep(nanoseconds: 4_000_000_000)
             if !Task.isCancelled && !scrubbing && !showAudioDelay && !showSubtitleTiming {

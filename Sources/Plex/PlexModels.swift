@@ -135,6 +135,7 @@ struct PlexHub: Decodable, Identifiable {
 // MARK: - Items
 
 struct PlexPart: Decodable, Hashable {
+    let id: Int?
     let key: String?
     let container: String?
     let duration: Int?
@@ -144,6 +145,7 @@ struct PlexPart: Decodable, Hashable {
 
 /// One audio / video / subtitle stream inside (or next to) a file.
 struct PlexStream: Decodable, Hashable {
+    let id: Int?
     let streamType: Int?
     let key: String?
     let languageCode: String?

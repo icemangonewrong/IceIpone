@@ -57,6 +57,8 @@ final class PlaybackManager: NSObject, ObservableObject {
     @Published private(set) var audioOutputName = ""
     /// Short message shown on the video for a few seconds.
     @Published private(set) var toast: String?
+    /// Name of the Apple TV (or other AirPlay screen) the video is playing on, while it is.
+    @Published private(set) var castingTo: String?
 
     static let upNextCountdown = 10
     private var markers: [PlexMarker] = []
@@ -84,6 +86,14 @@ final class PlaybackManager: NSObject, ObservableObject {
     }()
 
     private var vlc: VLCMediaPlayer?
+    // AirPlay: the video is handed to Apple's player, which sends it to the TV (the TV fetches it from Plex itself).
+    private var av: AVPlayer?
+    private var avView: AVPlayerHostView?
+    private var avTimeObserver: Any?
+    private var avObservers: [NSKeyValueObservation] = []
+    private var avEndObserver: NSObjectProtocol?
+    private var avSession = ""
+    private var avPendingSeek: Double?
     private var proxy: StreamProxy?
     /// The next episode's first ~20 seconds, fetched near the end of this one so it starts at once.
     private var preload: (key: String, proxy: StreamProxy, url: URL, item: PlexItem, after: PlexItem?)?
@@ -192,7 +202,7 @@ final class PlaybackManager: NSObject, ObservableObject {
             preload = nil
             DispatchQueue.global(qos: .utility).async { pre.proxy.stop() }
         }
-        if proxy == nil, let size = target.firstPart?.size, size > 0, duration > 0 {
+        if proxy == nil, Self.airPlayRouteName() == nil, let size = target.firstPart?.size, size > 0, duration > 0 {
             let p = StreamProxy(remote: remote, size: size, duration: duration,
                                 aheadSeconds: Double(state.bufferMinutes * 60),
                                 container: target.container)
@@ -206,7 +216,7 @@ final class PlaybackManager: NSObject, ObservableObject {
         mediaURL = url
 
         wantsPlay = !heldForMotion
-        startVLC(at: resume)
+        if Self.airPlayRouteName() != nil { startAV(at: resume) } else { startVLC(at: resume) }
         startTimers()
         updateNowPlaying()
         fetchExtras(for: target)
@@ -239,6 +249,7 @@ final class PlaybackManager: NSObject, ObservableObject {
         vlc?.delegate = nil
         vlc?.stop()
         vlc = nil
+        stopAV()
         let oldProxy = proxy
         proxy = nil
         mediaURL = nil
@@ -348,6 +359,13 @@ final class PlaybackManager: NSObject, ObservableObject {
     // MARK: - Controls
 
     func togglePlayPause() {
+        if let av {
+            if wantsPlay { wantsPlay = false; av.pause() } else { if heldForMotion { return }; wantsPlay = true; av.play() }
+            isPlaying = wantsPlay
+            lastProgress = Date()
+            reportNow()
+            return
+        }
         guard let vlc else { return }
         if wantsPlay {
             wantsPlay = false
@@ -367,8 +385,15 @@ final class PlaybackManager: NSObject, ObservableObject {
     }
 
     func seek(to seconds: Double) {
-        guard let vlc else { return }
         let clamped = max(0, duration > 0 ? min(seconds, duration - 2) : seconds)
+        if let av {
+            av.seek(to: CMTime(seconds: clamped, preferredTimescale: 600))
+            currentTime = clamped
+            lastProgress = Date()
+            reportNow()
+            return
+        }
+        guard let vlc else { return }
         vlc.time = VLCTime(int: Int32(clamped * 1000))
         currentTime = clamped
         lastProgress = Date()
@@ -508,6 +533,11 @@ final class PlaybackManager: NSObject, ObservableObject {
     /// Every second: buffer readout, buffering spinner, signal status.
     private func watchdogTick() {
         guard isActive else { return }
+        if let av {
+            isBuffering = wantsPlay && av.timeControlStatus == .waitingToPlayAtSpecifiedRate
+            updateMarkers()
+            return
+        }
         if let snap = proxy?.snapshot() {
             bufferedAhead = Double(snap.bufferedBytes) / snap.bytesPerSecond
             offline = snap.offline
@@ -832,6 +862,7 @@ final class PlaybackManager: NSObject, ObservableObject {
     }
 
     private func audioRouteChanged() {
+        airPlayRouteChanged()
         let name = Self.currentOutputName()
         guard name != audioOutputName else { return }
         audioOutputName = name
@@ -840,6 +871,134 @@ final class PlaybackManager: NSObject, ObservableObject {
             let ms = audioDelayMs
             showToast("Audio: \(name)" + (ms != 0 ? "  ·  delay \(ms > 0 ? "+" : "")\(ms) ms" : ""))
         }
+    }
+
+    // MARK: - AirPlay
+
+    /// The AirPlay device sound and video are going to (Apple TV, AirPlay TV, HomePod…), if any.
+    static func airPlayRouteName() -> String? {
+        AVAudioSession.sharedInstance().currentRoute.outputs.first { $0.portType == .airPlay }?.portName
+    }
+
+    /// Picked an AirPlay device (or went back to the phone) while something is playing: move the video over.
+    private func airPlayRouteChanged() {
+        guard isActive, current != nil else { return }
+        let onAirPlay = Self.airPlayRouteName() != nil
+        if onAirPlay && av == nil {
+            let at = currentTime
+            vlc?.delegate = nil
+            vlc?.stop()
+            vlc = nil
+            startAV(at: at)
+        } else if !onAirPlay && av != nil {
+            let at = currentTime
+            stopAV()
+            if mediaURL == nil, let item = current { mediaURL = client.directURL(for: item) }
+            startVLC(at: at)
+            showToast("Back on the phone")
+        }
+    }
+
+    /// Plays through Apple's player, which hands the stream to the AirPlay device. Plex repackages the file
+    /// for it (no re-encoding when the TV can play it as is).
+    private func startAV(at seconds: Double) {
+        guard let item = current else { return }
+        isBuffering = true
+        Task { @MainActor in
+            await client.preferEnglishAudio(item)
+            guard current?.ratingKey == item.ratingKey, av == nil else { return }
+            avSession = UUID().uuidString
+            guard let url = client.castURL(for: item, session: avSession) else {
+                errorMessage = "Couldn't start AirPlay for this video."
+                return
+            }
+            let player = AVPlayer(url: url)
+            player.allowsExternalPlayback = true
+            player.usesExternalPlaybackWhileExternalScreenIsActive = true
+            let host = AVPlayerHostView(frame: videoView.bounds)
+            host.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+            host.playerLayer.player = player
+            host.playerLayer.videoGravity = .resizeAspect
+            videoView.addSubview(host)
+            av = player
+            avView = host
+            avPendingSeek = seconds > 1 ? seconds : nil
+            avTimeObserver = player.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.5, preferredTimescale: 600),
+                                                            queue: .main) { [weak self] t in
+                Task { @MainActor in
+                    guard let self, self.av === player, self.avPendingSeek == nil else { return }
+                    let secs = t.seconds
+                    if secs.isFinite && secs > 0 {
+                        if abs(secs - self.lastTimeValue) > 0.01 { self.lastProgress = Date() }
+                        self.lastTimeValue = secs
+                        self.currentTime = secs
+                    }
+                }
+            }
+            avObservers = [
+                player.observe(\.isExternalPlaybackActive, options: [.initial, .new]) { [weak self] p, _ in
+                    Task { @MainActor in
+                        guard let self, self.av === player else { return }
+                        self.castingTo = p.isExternalPlaybackActive ? (Self.airPlayRouteName() ?? "Apple TV") : nil
+                        self.updateNowPlaying()
+                    }
+                },
+                player.observe(\.status, options: [.new]) { [weak self] p, _ in
+                    Task { @MainActor in
+                        guard let self, self.av === player else { return }
+                        if p.status == .readyToPlay {
+                            self.hasPlayedSinceStart = true
+                            if let s = self.avPendingSeek {
+                                player.seek(to: CMTime(seconds: s, preferredTimescale: 600)) { _ in
+                                    Task { @MainActor in self.avPendingSeek = nil }
+                                }
+                            }
+                            if self.wantsPlay && !self.heldForMotion { player.play() }
+                            self.isPlaying = self.wantsPlay
+                        } else if p.status == .failed {
+                            self.errorMessage = "AirPlay couldn't play this video. \(p.error?.localizedDescription ?? "")"
+                        }
+                    }
+                },
+            ]
+            if let item = player.currentItem {
+                avObservers.append(item.observe(\.status, options: [.new]) { [weak self] it, _ in
+                    Task { @MainActor in
+                        guard let self, self.av === player, it.status == .failed else { return }
+                        self.errorMessage = "AirPlay couldn't play this video. \(it.error?.localizedDescription ?? "")"
+                    }
+                })
+                avEndObserver = NotificationCenter.default.addObserver(
+                    forName: .AVPlayerItemDidPlayToEndTime, object: item, queue: .main) { [weak self] _ in
+                    Task { @MainActor in
+                        guard let self, self.av === player else { return }
+                        await self.finished()
+                    }
+                }
+            }
+            lastProgress = Date()
+            lastTimeValue = -1
+            if wantsPlay { player.play() }
+        }
+    }
+
+    private func stopAV() {
+        guard let player = av else { castingTo = nil; return }
+        if let o = avTimeObserver { player.removeTimeObserver(o) }
+        avTimeObserver = nil
+        avObservers.forEach { $0.invalidate() }
+        avObservers = []
+        if let o = avEndObserver { NotificationCenter.default.removeObserver(o) }
+        avEndObserver = nil
+        player.pause()
+        player.replaceCurrentItem(with: nil)
+        avView?.removeFromSuperview()
+        avView = nil
+        av = nil
+        castingTo = nil
+        let session = avSession
+        let c = client
+        Task { await c.stopCast(session: session) }
     }
 
     static func currentOutputName() -> String {
@@ -1011,4 +1170,11 @@ extension PlaybackManager: CLLocationManagerDelegate {
     nonisolated func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
         Task { @MainActor in self.updateMotionMonitoring() }
     }
+}
+
+
+/// A view whose layer is Apple's video layer (shows the picture when AirPlay is sending sound only).
+final class AVPlayerHostView: UIView {
+    override class var layerClass: AnyClass { AVPlayerLayer.self }
+    var playerLayer: AVPlayerLayer { layer as! AVPlayerLayer }
 }
