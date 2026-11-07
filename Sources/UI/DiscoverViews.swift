@@ -58,7 +58,7 @@ func seerrDestination(_ r: SeerrResult) -> some View {
 
 // MARK: - Poster
 
-/// Poster from Seerr: IMDb badge, in-library / requested mark, a "+" to request right there, title, year · rating.
+/// Poster from Seerr: IMDb badge, in-library / requested mark, title, year · rating. Long press to request.
 struct SeerrPoster: View {
     @EnvironmentObject var app: AppState
     @ObservedObject private var extras = SeerrExtras.shared
@@ -86,21 +86,6 @@ struct SeerrPoster: View {
                     .overlayCompat(alignment: .topTrailing) { StatusDot(mark: mark).padding(4) }
                 }
                 .plainButton()
-                if mark == nil {
-                    Button {
-                        request()
-                    } label: {
-                        Image(systemName: working ? "hourglass" : "plus")
-                            .font(.system(size: 15, weight: .bold))
-                            .foregroundColor(.black)
-                            .frame(width: 30, height: 30)
-                            .background(Circle().fill(Color.ice))
-                            .shadow(radius: 3)
-                    }
-                    .plainButton()
-                    .disabled(working)
-                    .padding(6)
-                }
             }
             NavigationLink(destination: seerrDestination(result)) {
                 VStack(alignment: .leading, spacing: 2) {
