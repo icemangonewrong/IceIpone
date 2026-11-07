@@ -54,6 +54,9 @@ final class SeerrClient {
     let plexToken: String
     private let session: URLSession
     private var signedIn = false
+    /// Seerr's sign-in cookie, sent by hand: Seerr can mark it HTTPS-only, and this runs over plain http
+    /// (WireGuard), so the system cookie handling would never send it back.
+    private var cookie: String?
 
     init?(url: String, plexToken: String?) {
         var b = url.trimmingCharacters(in: .whitespaces)
@@ -62,10 +65,10 @@ final class SeerrClient {
         if !b.contains("://") { b = "http://" + b }
         base = b
         self.plexToken = token
-        let cfg = URLSessionConfiguration.ephemeral   // own cookie jar for Seerr's sign-in cookie
+        let cfg = URLSessionConfiguration.ephemeral
         cfg.timeoutIntervalForRequest = 20
-        cfg.httpCookieStorage = HTTPCookieStorage()
-        cfg.httpShouldSetCookies = true
+        cfg.httpShouldSetCookies = false
+        cfg.httpCookieAcceptPolicy = .never
         session = URLSession(configuration: cfg)
     }
 
@@ -76,22 +79,30 @@ final class SeerrClient {
         var req = URLRequest(url: url)
         req.httpMethod = method
         req.setValue("application/json", forHTTPHeaderField: "Accept")
+        if let cookie { req.setValue(cookie, forHTTPHeaderField: "Cookie") }
         if let body {
             req.httpBody = try JSONSerialization.data(withJSONObject: body)
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         }
         do {
             let (data, resp) = try await session.dataCompat(for: req)
-            return (data, (resp as? HTTPURLResponse)?.statusCode ?? 0)
+            let http = resp as? HTTPURLResponse
+            if let set = http?.value(forHTTPHeaderField: "Set-Cookie"),
+               let r = set.range(of: #"connect\.sid=[^;,\s]+"#, options: .regularExpression) {
+                cookie = String(set[r])
+            }
+            return (data, http?.statusCode ?? 0)
         } catch {
             throw unreachable
         }
     }
 
     private func login() async throws {
+        cookie = nil
         let (_, code) = try await send("POST", "/auth/plex", body: ["authToken": plexToken])
         if code == 403 { throw SeerrError.message("Seerr didn't let this Plex account in.") }
         if code >= 400 || code == 0 { throw SeerrError.message("Seerr sign-in failed (\(code)).") }
+        if cookie == nil { throw SeerrError.message("Seerr signed in but sent no session cookie.") }
         signedIn = true
     }
 
