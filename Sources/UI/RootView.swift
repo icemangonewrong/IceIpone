@@ -49,12 +49,15 @@ struct MainTabs: View {
                 }
             }
             .animation(.easeInOut(duration: 0.25), value: miniShown)
+            .onAppear { IMDbRatings.shared.start() }
     }
 
     private var tabs: some View {
         TabView(selection: $selection) {
             NavStack { HomeView() }.miniPlayerSpace()
                 .tabItem { Label("Home", systemImage: "house") }.tag(0)
+            NavStack { DiscoverView() }.miniPlayerSpace()
+                .tabItem { Label("Discover", systemImage: "safari") }.tag(4)
             NavStack { LibrariesView() }.miniPlayerSpace()
                 .tabItem { Label("Libraries", systemImage: "square.grid.2x2") }.tag(1)
             NavStack { SearchView() }.miniPlayerSpace()

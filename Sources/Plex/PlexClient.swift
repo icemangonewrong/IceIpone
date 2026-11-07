@@ -149,7 +149,8 @@ final class PlexClient {
 
     private func serverURL(base: String, path: String, query: [URLQueryItem]) throws -> URL {
         guard var comps = URLComponents(string: base + path) else { throw PlexError.noServer }
-        if !query.isEmpty { comps.queryItems = (comps.queryItems ?? []) + query }
+        // includeGuids: IMDb IDs, for the IMDb ratings.
+        comps.queryItems = (comps.queryItems ?? []) + query + [URLQueryItem(name: "includeGuids", value: "1")]
         guard let url = comps.url else { throw PlexError.noServer }
         return url
     }
@@ -224,6 +225,10 @@ final class PlexClient {
     }
 
     /// Next unwatched (or in-progress) episode of a show, for a "Play" button on a show.
+    func allEpisodes(showKey: String) async throws -> [PlexItem] {
+        try decodeItems(try await serverGET("/library/metadata/\(showKey)/allLeaves"))
+    }
+
     func nextEpisode(showKey: String) async throws -> PlexItem? {
         let eps = try decodeItems(try await serverGET("/library/metadata/\(showKey)/allLeaves"))
         return eps.first { ($0.viewOffset ?? 0) > 0 } ?? eps.first { ($0.viewCount ?? 0) == 0 } ?? eps.first

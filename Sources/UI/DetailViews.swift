@@ -65,6 +65,8 @@ struct PlayableDetailView: View {
                     PlayButtons(item: d)
                     WatchedButton(item: d, working: $working) { await load() }
 
+                    CastRowView(people: plexCast(d))
+
                     if let s = d.summary, !s.isEmpty {
                         Text(s).font(.body).foregroundColor(.white.opacity(0.9))
                     }
@@ -142,6 +144,7 @@ struct PlayableDetailView: View {
                     }
                 }
                 MetaLine(item: d)
+                if let r = d.imdbRating { IMDbBadge(score: r, size: 12) }
                 if let genres = d.Genre, !genres.isEmpty {
                     Text(genres.prefix(4).map(\.tag).joined(separator: " · "))
                         .font(.caption).foregroundColor(.secondary)
@@ -186,6 +189,7 @@ struct ShowDetailView: View {
                         VStack(alignment: .leading, spacing: 6) {
                             Text(d.title ?? "").font(.title.bold()).fixedSize(horizontal: false, vertical: true)
                             MetaLine(item: d, seasons: seasons.count)
+                            if let r = d.imdbRating { IMDbBadge(score: r, size: 12) }
                             if let genres = d.Genre, !genres.isEmpty {
                                 Text(genres.prefix(4).map(\.tag).joined(separator: " · "))
                                     .font(.caption).foregroundColor(.secondary)
@@ -212,6 +216,8 @@ struct ShowDetailView: View {
 
                     WatchedButton(item: d, working: $working) { await load() }
 
+                    CastRowView(people: plexCast(d))
+
                     if let s = d.summary, !s.isEmpty {
                         Text(s).foregroundColor(.white.opacity(0.9))
                     }
@@ -225,6 +231,10 @@ struct ShowDetailView: View {
                                         NavigationLink(destination: ItemDetailView(item: season)) {
                                             VStack(alignment: .leading, spacing: 4) {
                                                 PosterImage(path: season.thumb ?? d.thumb, width: 105)
+                                                    .overlayCompat(alignment: .topLeading) {
+                                                        // Seasons have no score of their own: show the show's.
+                                                        if let r = d.imdbRating { IMDbBadge(score: r, size: 10).padding(4) }
+                                                    }
                                                     .overlayCompat(alignment: .topTrailing) {
                                                         if season.isWatched {
                                                             Image(systemName: "checkmark.circle.fill")
@@ -350,7 +360,7 @@ private struct Backdrop: View {
     }
 }
 
-/// "2023 · PG-13 · 1h 52m · ★ 8.1"
+/// "2023 · PG-13 · 1h 52m"
 private struct MetaLine: View {
     let item: PlexItem
     var seasons: Int = 0
@@ -364,7 +374,6 @@ private struct MetaLine: View {
         } else if let d = item.duration {
             parts.append(runtimeString(d))
         }
-        if let score = item.audienceRating ?? item.rating { parts.append(String(format: "★ %.1f", score)) }
         return parts.joined(separator: " · ")
     }
 
@@ -449,32 +458,27 @@ private struct WatchedButton: View {
     }
 }
 
-/// Director and cast.
+/// Director(s) and writers; each name opens their page.
 private struct CreditsView: View {
     let item: PlexItem
 
     var body: some View {
         let directors = (item.Director ?? []).map(\.tag)
-        let cast = Array((item.Role ?? []).prefix(10))
-        if !directors.isEmpty || !cast.isEmpty {
-            VStack(alignment: .leading, spacing: 8) {
-                if !directors.isEmpty {
-                    Text("Directed by ").foregroundColor(.secondary) + Text(directors.joined(separator: ", "))
-                }
-                if !cast.isEmpty {
-                    Text("Cast").font(.headline).padding(.top, 4)
-                    ForEach(cast, id: \.self) { r in
-                        HStack(alignment: .firstTextBaseline) {
-                            Text(r.tag).font(.subheadline.weight(.medium))
-                            if let role = r.role, !role.isEmpty {
-                                Text(role).font(.subheadline).foregroundColor(.secondary).lineLimit(1)
-                            }
-                            Spacer()
-                        }
-                    }
-                }
+        let writers = Array((item.Writer ?? []).map(\.tag).prefix(4))
+        VStack(alignment: .leading, spacing: 8) {
+            LinkLine(label: directors.count > 1 ? "Directors" : "Director", names: directors) { i in
+                PersonView(personID: nil, name: directors[i])
             }
-            .font(.subheadline)
+            LinkLine(label: writers.count > 1 ? "Writers" : "Writer", names: writers) { i in
+                PersonView(personID: nil, name: writers[i])
+            }
+            if let studio = item.studio, item.type != "episode" {
+                HStack(spacing: 10) {
+                    Text("Studio").foregroundColor(.secondary).frame(width: 96, alignment: .leading)
+                    Text(studio)
+                }
+                .font(.subheadline)
+            }
         }
     }
 }
@@ -583,8 +587,11 @@ struct EpisodeRow: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text("\(item.index.map { "\($0). " } ?? "")\(item.title ?? "Episode")")
                     .font(.subheadline.weight(.semibold)).lineLimit(2)
-                if let d = item.duration {
-                    Text(runtimeString(d)).font(.caption).foregroundColor(.secondary)
+                HStack(spacing: 6) {
+                    if let d = item.duration {
+                        Text(runtimeString(d)).font(.caption).foregroundColor(.secondary)
+                    }
+                    if let r = item.imdbRating { IMDbBadge(score: r, size: 9) }
                 }
             }
             Spacer()

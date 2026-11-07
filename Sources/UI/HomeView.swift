@@ -80,6 +80,7 @@ struct ItemRow: View {
 
 /// Poster tile. Tapping always opens the info page.
 struct ItemTile: View {
+    @ObservedObject private var ratings = IMDbRatings.shared   // redraw when IMDb scores arrive
     let item: PlexItem
     let width: CGFloat
 
@@ -131,13 +132,7 @@ struct ItemTile: View {
                 }
                 .overlayCompat(alignment: .topLeading) {
                     if let r = item.imdbRating {
-                        Text(String(format: "IMDb %.1f", r))
-                            .font(.system(size: width < 120 ? 10 : 11, weight: .heavy))
-                            .foregroundColor(.black)
-                            .padding(.horizontal, 5)
-                            .padding(.vertical, 2)
-                            .background(RoundedRectangle(cornerRadius: 4).fill(Color(red: 0.96, green: 0.77, blue: 0.09)))
-                            .padding(5)
+                        IMDbBadge(score: r, size: width < 120 ? 10 : 11).padding(5)
                     }
                 }
                 .overlayCompat(alignment: .topTrailing) {

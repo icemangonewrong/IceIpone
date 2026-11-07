@@ -193,6 +193,11 @@ struct PlexTag: Decodable, Hashable {
 struct PlexRole: Decodable, Hashable {
     let tag: String
     let role: String?
+    let thumb: String?
+}
+
+struct PlexGuid: Decodable, Hashable {
+    let id: String
 }
 
 struct PlexItem: Decodable, Identifiable, Hashable {
@@ -232,13 +237,27 @@ struct PlexItem: Decodable, Identifiable, Hashable {
     let Media: [PlexMedia]?
     let Genre: [PlexTag]?
     let Director: [PlexTag]?
+    let Writer: [PlexTag]?
     let Role: [PlexRole]?
+    let Guid: [PlexGuid]?
+    let guid: String?
     let Marker: [PlexMarker]?
 
     var id: String { ratingKey.value }
 
-    /// The IMDb score, when the server has one (library's ratings source set to IMDb, or listed in Rating).
+    /// tt1234567, from the Guid list (asked for with includeGuids=1).
+    var imdbID: String? {
+        if let g = Guid?.first(where: { $0.id.hasPrefix("imdb://") }) { return String(g.id.dropFirst(7)) }
+        if let g = guid, let r = g.range(of: "imdb://") {   // old-style agent: com.plexapp.agents.imdb://tt123?lang=en
+            return String(g[r.upperBound...].prefix { $0 != "?" })
+        }
+        return nil
+    }
+
+    /// The IMDb score: from IMDb's daily ratings file (every library, every episode), otherwise whatever the
+    /// server has (library's ratings source set to IMDb).
     var imdbRating: Double? {
+        if let v = IMDbRatings.shared.rating(imdbID) { return v }
         if let r = Rating?.first(where: { ($0.image ?? "").hasPrefix("imdb://") }), let v = r.value?.value { return v }
         if (audienceRatingImage ?? "").hasPrefix("imdb://"), let v = audienceRating { return v }
         if (ratingImage ?? "").hasPrefix("imdb://"), let v = rating { return v }
@@ -273,8 +292,8 @@ struct PlexItem: Decodable, Identifiable, Hashable {
             return parts.joined(separator: " · ")
         }
         if type == "season", let show = parentTitle { return show }
-        if let y = year { return String(y) }
-        return nil
+        let parts = [year.map { String($0) }, contentRating].compactMap { $0 }.filter { !$0.isEmpty }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 
     /// Poster artwork: show poster for episodes looks better in rows.
