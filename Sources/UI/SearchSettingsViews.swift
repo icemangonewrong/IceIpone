@@ -344,8 +344,8 @@ struct SeerrSettingsSection: View {
 
     var body: some View {
         Section(header: Text("Requests (Seerr)"),
-                footer: Text("Search shows everything, not just your library, and lets you request what's missing through Seerr. Ice signs in with your Plex account. Over WireGuard, the address is usually http://10.66.66.1:5055.")) {
-            TextField("http://10.66.66.1:5055", text: $url, onCommit: { SeerrClient.savedURL = url })
+                footer: Text("Search shows everything, not just your library, and lets you request what's missing through Seerr. Ice signs in with your Plex account. Over WireGuard, the address is usually http://10.66.66.1:5056.")) {
+            TextField("http://10.66.66.1:5056", text: $url, onCommit: { SeerrClient.savedURL = url })
                 .keyboardType(.URL)
                 .autocapitalization(.none)
                 .disableAutocorrection(true)

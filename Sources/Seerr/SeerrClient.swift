@@ -40,10 +40,13 @@ enum SeerrError: LocalizedError {
 final class SeerrClient {
     static let pending = 2, processing = 3, partial = 4, available = 5
     static let statusText: [Int: String] = [2: "Requested", 3: "Requested", 4: "Partly available", 5: "Available"]
-    static let defaultURL = "http://10.66.66.1:5055"
+    static let defaultURL = "http://10.66.66.1:5056"
 
     static var savedURL: String {
-        get { UserDefaults.standard.string(forKey: "seerrUrl") ?? defaultURL }
+        get {
+            let saved = UserDefaults.standard.string(forKey: "seerrUrl") ?? defaultURL
+            return saved == "http://10.66.66.1:5055" ? defaultURL : saved   // the first default had the wrong port
+        }
         set { UserDefaults.standard.set(newValue, forKey: "seerrUrl") }
     }
 
