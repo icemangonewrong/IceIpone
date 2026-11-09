@@ -211,8 +211,15 @@ struct DiscoverView: View {
             VStack(alignment: .leading, spacing: 26) {
                 chips
                 if seerr(app) == nil {
-                    Text("Discover uses your Seerr. Set its address in Settings → Requests (Seerr).")
-                        .foregroundColor(.secondary).padding(.horizontal)
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("Discover and requests use Seerr. Set it up in Settings → Requests (Seerr).")
+                            .foregroundColor(.secondary)
+                        NavigationLink(destination: SettingsView()) {
+                            Label("Open Settings", systemImage: "gear").padding(.vertical, 4)
+                        }
+                        .prominentButton()
+                    }
+                    .padding(.horizontal)
                 } else {
                     if failed.count == Self.rowDefs.count {
                         VStack(spacing: 10) {
@@ -836,6 +843,17 @@ struct TitleView: View {
 }
 
 // MARK: - Actor / director
+
+/// "Sat, Nov 15" (adds the year when it isn't this year).
+func weekdayDate(_ s: String) -> String {
+    let df = DateFormatter()
+    df.dateFormat = "yyyy-MM-dd"
+    guard let d = df.date(from: String(s.prefix(10))) else { return s }
+    let out = DateFormatter()
+    out.dateFormat = Calendar.current.component(.year, from: d) == Calendar.current.component(.year, from: Date())
+        ? "EEE, MMM d" : "EEE, MMM d, yyyy"
+    return out.string(from: d)
+}
 
 func niceDate(_ s: String) -> String {
     let df = DateFormatter()

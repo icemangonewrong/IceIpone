@@ -166,9 +166,16 @@ final class SeerrClient {
         ("Hulu", ["hulu"]), ("Peacock", ["peacock premium", "peacock"]),
         ("Paramount+", ["paramount plus", "paramount+", "paramount plus premium"])]
 
+    /// No address until it's set up in Settings. (Phones that already used Seerr with the old built-in address
+    /// keep it.)
     static var savedURL: String {
         get {
-            let saved = UserDefaults.standard.string(forKey: "seerrUrl") ?? defaultURL
+            if UserDefaults.standard.string(forKey: "seerrUrl") == nil {
+                let used = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+                    .appendingPathComponent("seerr_extras.json")
+                UserDefaults.standard.set(FileManager.default.fileExists(atPath: used.path) ? defaultURL : "", forKey: "seerrUrl")
+            }
+            let saved = UserDefaults.standard.string(forKey: "seerrUrl") ?? ""
             return saved == "http://10.66.66.1:5055" ? defaultURL : saved   // the first default had the wrong port
         }
         set { UserDefaults.standard.set(newValue, forKey: "seerrUrl") }
@@ -607,6 +614,16 @@ final class SeerrClient {
             await MainActor.run { SeerrExtras.shared.put(out.asResult, imdb: imdb, cert: out.cert) }
         }
         return out
+    }
+
+    /// A show's release schedule: next episode ("S4 E7", name, date) and status (e.g. "Ended").
+    func schedule(_ tmdbID: Int) async throws -> (code: String, name: String, date: String, status: String, last: String) {
+        let d = try await call("GET", "/tv/\(tmdbID)") as? [String: Any] ?? [:]
+        let n = d["nextEpisodeToAir"] as? [String: Any] ?? [:]
+        var code = ""
+        if let s = n["seasonNumber"] as? Int, let e = n["episodeNumber"] as? Int { code = "S\(s) E\(e)" }
+        return (code, n["name"] as? String ?? "", n["airDate"] as? String ?? "", d["status"] as? String ?? "",
+                (d["lastEpisodeToAir"] as? [String: Any])?["airDate"] as? String ?? "")
     }
 
     func seasonEpisodes(_ tmdbID: Int, _ season: Int) async throws -> [SeerrEpisode] {

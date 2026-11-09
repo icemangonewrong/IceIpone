@@ -131,7 +131,7 @@ struct ItemTile: View {
                     }
                 }
                 .overlayCompat(alignment: .topLeading) {
-                    if let r = item.imdbRating {
+                    if item.type != "episode", let r = item.imdbRating {   // not on single episodes
                         IMDbBadge(score: r, size: width < 120 ? 10 : 11).padding(5)
                     }
                 }

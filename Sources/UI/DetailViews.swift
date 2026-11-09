@@ -175,6 +175,7 @@ struct ShowDetailView: View {
     @State private var seasons: [PlexItem] = []
     @State private var next: PlexItem?
     @State private var working = false
+    @State private var schedule: String?
 
     private var d: PlexItem { full ?? item }
 
@@ -195,6 +196,11 @@ struct ShowDetailView: View {
                                     .font(.caption).foregroundColor(.secondary)
                             }
                         }
+                    }
+
+                    if let schedule {
+                        Text(schedule).font(.subheadline.weight(.semibold))
+                            .foregroundColor(schedule.hasPrefix("Next") ? Color.ice : .secondary)
                     }
 
                     if let next {
@@ -275,6 +281,15 @@ struct ShowDetailView: View {
         seasons = ((try? await app.client.children(of: key)) ?? []).filter { $0.type == "season" }
         next = try? await app.client.nextEpisode(showKey: key)
         if let n = next { playback.warm(n) }
+        // Release schedule (from Seerr): when the next episode comes out.
+        if schedule == nil, let tid = (full ?? item).tmdbID, let sr = seerr(app), let s = try? await sr.schedule(tid) {
+            if !s.code.isEmpty {
+                let when = s.date.isEmpty ? "date not announced" : weekdayDate(s.date)
+                schedule = "Next episode: \(s.code)" + (s.name.isEmpty ? "" : " “\(s.name)”") + " · \(when)"
+            } else if s.status == "Ended" || s.status == "Canceled" {
+                schedule = s.status + (s.last.isEmpty ? "" : " · last episode \(niceDate(s.last))")
+            }
+        }
     }
 }
 
@@ -288,7 +303,29 @@ struct SeasonDetailView: View {
     @State private var episodes: [PlexItem] = []
     @State private var loading = true
     @State private var working = false
+    @State private var coming: [SeerrEpisode] = []
     @EnvironmentObject var playback: PlaybackManager
+
+    private func isFuture(_ s: String) -> Bool {
+        let df = DateFormatter()
+        df.dateFormat = "yyyy-MM-dd"
+        guard let d = df.date(from: String(s.prefix(10))) else { return true }
+        return d > Date()
+    }
+
+    private func comingText(_ e: SeerrEpisode) -> String {
+        if e.airDate.isEmpty { return "Date not announced" }
+        return isFuture(e.airDate) ? "Airs \(weekdayDate(e.airDate))" : "Aired \(niceDate(e.airDate))"
+    }
+
+    /// Episodes not here yet (from Seerr): ones still to air with their dates, and any that are out but missing.
+    private func loadComing() async {
+        guard let sr = seerr(app), let show = d.parentRatingKey?.value, let n = d.index,
+              let showItem = try? await app.client.metadata(show), let tid = showItem.tmdbID,
+              let eps = try? await sr.seasonEpisodes(tid, n) else { return }
+        let have = Set(episodes.compactMap(\.index))
+        coming = eps.filter { !have.contains($0.number) }
+    }
 
     private var d: PlexItem { full ?? item }
 
@@ -319,6 +356,20 @@ struct SeasonDetailView: View {
                     NavigationLink(destination: ItemDetailView(item: ep)) { EpisodeRow(item: ep) }
                 }
             }
+
+            if !coming.isEmpty {
+                Section(header: Text("Not in your library yet")) {
+                    ForEach(coming, id: \.number) { e in
+                        HStack {
+                            Text("\(e.number). \(e.name.isEmpty ? "Episode \(e.number)" : e.name)")
+                                .font(.subheadline.weight(.semibold)).foregroundColor(.white.opacity(0.8)).lineLimit(2)
+                            Spacer()
+                            Text(comingText(e)).font(.caption.weight(.semibold))
+                                .foregroundColor(isFuture(e.airDate) ? Color.ice : .secondary)
+                        }
+                    }
+                }
+            }
         }
         .listStyle(PlainListStyle())
         .overlayCompat { if loading && episodes.isEmpty { OrangeSpinner() } }
@@ -336,6 +387,7 @@ struct SeasonDetailView: View {
         if let fresh = try? await app.client.metadata(item.ratingKey.value) { full = fresh }
         episodes = (try? await app.client.children(of: item.ratingKey.value)) ?? []
         loading = false
+        await loadComing()
     }
 }
 
@@ -587,12 +639,8 @@ struct EpisodeRow: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text("\(item.index.map { "\($0). " } ?? "")\(item.title ?? "Episode")")
                     .font(.subheadline.weight(.semibold)).lineLimit(2)
-                HStack(spacing: 6) {
-                    if let d = item.duration {
-                        Text(runtimeString(d)).font(.caption).foregroundColor(.secondary)
-                    }
-                    if let r = item.imdbRating { IMDbBadge(score: r, size: 9) }
-                }
+                Text([item.airDate, item.duration.map { runtimeString($0) }].compactMap { $0 }.joined(separator: " · "))
+                    .font(.caption).foregroundColor(.secondary)
             }
             Spacer()
             if item.isWatched && item.progress == nil {

@@ -243,9 +243,21 @@ struct PlexItem: Decodable, Identifiable, Hashable {
     let Role: [PlexRole]?
     let Guid: [PlexGuid]?
     let guid: String?
+    let originallyAvailableAt: String?
     let Marker: [PlexMarker]?
 
     var id: String { ratingKey.value }
+
+    var tmdbID: Int? {
+        Guid?.first(where: { $0.id.hasPrefix("tmdb://") }).flatMap { Int($0.id.dropFirst(7)) }
+    }
+
+    /// "Aug 12, 2026": when it first aired / came out.
+    var airDate: String? {
+        guard let s = originallyAvailableAt, !s.isEmpty else { return nil }
+        let r = niceDate(s)
+        return r == s ? nil : r
+    }
 
     /// tt1234567, from the Guid list (asked for with includeGuids=1).
     var imdbID: String? {
