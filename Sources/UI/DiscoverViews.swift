@@ -51,8 +51,50 @@ struct StatusDot: View {
 func seerrDestination(_ r: SeerrResult) -> some View {
     if r.status == SeerrClient.available, let rk = r.ratingKey {
         LoadItemView(key: rk)
+    } else if r.status == SeerrClient.available {
+        LibraryLookupView(result: r)
     } else {
         TitleView(result: r)
+    }
+}
+
+/// The Plex item for a Seerr title that's in the library. Seerr usually says which one; when it doesn't, look it
+/// up in Plex by its TMDB id (or title and year).
+@MainActor func findInLibrary(_ app: AppState, _ r: SeerrResult) async -> PlexItem? {
+    if let rk = r.ratingKey, let it = try? await app.client.metadata(rk) { return it }
+    let want = r.kind == "movie" ? "movie" : "show"
+    let hits = ((try? await app.client.search(r.title)) ?? []).filter { $0.type == want }
+    return hits.first { $0.tmdbID == r.id }
+        ?? hits.first { ($0.title ?? "").lowercased() == r.title.lowercased() && ($0.year.map { String($0) } ?? "") == r.year }
+}
+
+/// Play a movie, or a show's next episode.
+@MainActor func playFromLibrary(_ app: AppState, _ playback: PlaybackManager, _ item: PlexItem) async {
+    if item.type == "show" {
+        if let ep = try? await app.client.nextEpisode(showKey: item.ratingKey.value) { await playback.play(ep) }
+    } else {
+        await playback.play(item)
+    }
+}
+
+/// Finds an in-library title in Plex, then shows its library page (or the title page if it isn't found).
+struct LibraryLookupView: View {
+    @EnvironmentObject var app: AppState
+    let result: SeerrResult
+    @State private var key: String?
+    @State private var done = false
+
+    var body: some View {
+        Group {
+            if let key { LoadItemView(key: key) }
+            else if done { TitleView(result: result) }
+            else { OrangeSpinner() }
+        }
+        .taskCompat {
+            guard !done else { return }
+            key = await findInLibrary(app, result)?.ratingKey.value
+            done = true
+        }
     }
 }
 
@@ -61,6 +103,7 @@ func seerrDestination(_ r: SeerrResult) -> some View {
 /// Poster from Seerr: IMDb badge, in-library / requested mark, title, year · rating. Long press to request.
 struct SeerrPoster: View {
     @EnvironmentObject var app: AppState
+    @EnvironmentObject var playback: PlaybackManager
     @ObservedObject private var extras = SeerrExtras.shared
     @ObservedObject private var ratings = IMDbRatings.shared
     let result: SeerrResult
@@ -99,6 +142,11 @@ struct SeerrPoster: View {
         .frame(width: width)
         .contextMenu {
             if mark == nil { Button { request() } label: { Label("Request", systemImage: "plus") } }
+            if result.mark == "lib" {
+                Button {
+                    Task { @MainActor in if let it = await findInLibrary(app, result) { await playFromLibrary(app, playback, it) } }
+                } label: { Label("Play", systemImage: "play.fill") }
+            }
         }
         .onAppear { extras.want(result, seerr(app)) }
     }
@@ -610,8 +658,10 @@ struct LinkLine<Dest: View>: View {
 
 struct TitleView: View {
     @EnvironmentObject var app: AppState
+    @EnvironmentObject var playback: PlaybackManager
     @ObservedObject private var ratings = IMDbRatings.shared
     let result: SeerrResult
+    @State private var libItem: PlexItem?
 
     @State private var info: SeerrTitle?
     @State private var scores: (imdb: Double?, rt: Int?) = (nil, nil)
@@ -703,11 +753,19 @@ struct TitleView: View {
         let st = info.result.status
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 10) {
-                if (st == SeerrClient.available || st == SeerrClient.partial), let rk = info.result.ratingKey {
-                    NavigationLink(destination: LoadItemView(key: rk)) {
-                        Label("Open", systemImage: "play.fill").font(.headline).frame(maxWidth: .infinity).padding(.vertical, 4)
+                if st == SeerrClient.available || st == SeerrClient.partial {
+                    if let lib = libItem {
+                        Button { Task { await playFromLibrary(app, playback, lib) } } label: {
+                            Label("Play", systemImage: "play.fill").font(.headline).frame(maxWidth: .infinity).padding(.vertical, 4)
+                        }
+                        .prominentButton()
+                        NavigationLink(destination: LoadItemView(key: lib.ratingKey.value)) {
+                            Text("Open").padding(.vertical, 4)
+                        }
+                        .borderedButton()
+                    } else {
+                        OrangeSpinner(size: 22)
                     }
-                    .prominentButton()
                 }
                 if state == "done" {
                     Label("Requested", systemImage: "checkmark.circle.fill").foregroundColor(Color.ice)
@@ -818,6 +876,9 @@ struct TitleView: View {
             info = t
             SeerrExtras.shared.put(t.result, imdb: t.imdbID, cert: t.cert)
             picked = Set(t.seasons.filter { !locked($0.status) }.map(\.number))
+            if t.result.status == SeerrClient.available || t.result.status == SeerrClient.partial {
+                libItem = await findInLibrary(app, t.result)
+            }
             scores = await sr.scores(result.kind, result.id)
             recs = await sr.recommendations(result.kind, result.id)
         } catch {

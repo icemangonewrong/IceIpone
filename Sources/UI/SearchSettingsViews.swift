@@ -32,7 +32,7 @@ struct SearchView: View {
                 }
             }
             if !others.isEmpty || othersNote != nil {
-                Section(header: Text("Not in your library · request with Seerr")) {
+                Section(header: Text("From Seerr · request what you don't have")) {
                     if let note = othersNote {
                         Text(note).font(.footnote).foregroundColor(.secondary)
                     }
@@ -63,16 +63,29 @@ struct SearchView: View {
             if let sr = seerr(app) {
                 foundPeople = Array(((try? await sr.searchPeople(text)) ?? []).sorted { ($0.photo != nil ? 0 : 1) < ($1.photo != nil ? 0 : 1) }.prefix(12))
                 do {
-                    // Things already in Plex show up in the results above, so leave them out here.
-                    seerrFound = try await sr.search(text).filter { $0.status != SeerrClient.available }
-                    if seerrFound.isEmpty { note = "Nothing else found." }
+                    seerrFound = try await sr.search(text)
                 } catch {
                     note = "Couldn't search Seerr: \(error.localizedDescription)"
                 }
             }
             let found = await plex
+            // Things in Plex that showed up in the results above are left out below. Anything Seerr knows is in the
+            // library but Plex's search missed stays (opens the library page to play).
+            // Newest first (library and Seerr alike).
+            let shown = found.filter { !app.isExcluded($0) }.sorted { releaseKey($0) > releaseKey($1) }
+            let keys = Set(shown.map { $0.ratingKey.value })
+            let tmdb = Set(shown.compactMap { i in i.tmdbID.map { "\(i.type ?? ""):\($0)" } })
+            let names = Set(shown.map { "\(($0.title ?? "").lowercased())|\($0.year.map { String($0) } ?? "")" })
+            seerrFound = seerrFound.filter { r in
+                guard r.status == SeerrClient.available else { return true }
+                if let rk = r.ratingKey, keys.contains(rk) { return false }
+                if tmdb.contains("\(r.kind == "movie" ? "movie" : "show"):\(r.id)") { return false }
+                return !names.contains("\(r.title.lowercased())|\(r.year)")
+            }
+            if seerrFound.isEmpty && note == nil && seerr(app) != nil { note = "Nothing else found." }
+            seerrFound.sort { ($0.date.isEmpty ? "0000" : $0.date) > ($1.date.isEmpty ? "0000" : $1.date) }
             if !Task.isCancelled {
-                results = found.filter { !app.isExcluded($0) }
+                results = shown
                 others = seerrFound
                 othersNote = note
                 people = foundPeople
@@ -82,8 +95,15 @@ struct SearchView: View {
     }
 }
 
+/// Sort key for "newest first": the release / air date, or the year.
+func releaseKey(_ i: PlexItem) -> String {
+    if let d = i.originallyAvailableAt, !d.isEmpty { return d }
+    return i.year.map { "\($0)-00-00" } ?? "0000"
+}
+
 struct SeerrRow: View {
     @EnvironmentObject var app: AppState
+    @EnvironmentObject var playback: PlaybackManager
     @ObservedObject private var extras = SeerrExtras.shared
     @ObservedObject private var ratings = IMDbRatings.shared
     let result: SeerrResult
@@ -100,6 +120,17 @@ struct SeerrRow: View {
                         .joined(separator: " · "))
                     .font(.caption).foregroundColor(.secondary)
                 if let s = ratings.rating(e?.imdb) { IMDbBadge(score: s, size: 10) }
+            }
+            Spacer(minLength: 0)
+            if result.mark == "lib" {
+                // In the library (Plex's own search missed it): play right here.
+                Button {
+                    Task { @MainActor in if let it = await findInLibrary(app, result) { await playFromLibrary(app, playback, it) } }
+                } label: {
+                    Image(systemName: "play.fill").font(.system(size: 15, weight: .bold)).foregroundColor(.black)
+                        .frame(width: 36, height: 36).background(Circle().fill(Color.ice))
+                }
+                .buttonStyle(BorderlessButtonStyle())
             }
         }
         .onAppear { extras.want(result, seerr(app)) }
