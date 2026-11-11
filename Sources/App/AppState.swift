@@ -158,22 +158,49 @@ final class AppState: ObservableObject {
 
     // MARK: - Home data
 
+    @Published var homeError: String?
+    private var homeTask: Task<Void, Never>?
+    private var lastHomeLoad = Date.distantPast
+
+    /// Reloads Continue Watching and Recently Added. Runs on its own, so leaving the screen or letting go of
+    /// pull-to-refresh early can't cancel it halfway (that's what showed "cancelled"). Keeps what's on screen
+    /// if a part fails.
     func refreshHome() async {
         guard server != nil else { return }
+        if let running = homeTask { await running.value; return }
+        let task = Task { @MainActor in await self.loadHome() }
+        homeTask = task
+        await task.value
+        homeTask = nil
+    }
+
+    /// Quietly brings Home up to date when it's shown again (tab tap, back from the background), at most
+    /// every 20 seconds.
+    func refreshHomeIfStale() {
+        guard server != nil, Date().timeIntervalSince(lastHomeLoad) > 20 else { return }
+        Task { await refreshHome() }
+    }
+
+    private func loadHome() async {
         isLoading = true
-        errorMessage = nil
         defer { isLoading = false }
         do {
             sections = try await client.sections()
             let cw = try await client.continueWatching()
             continueWatching = cw.filter { !isExcluded($0) }
-            var newRecent: [String: [PlexItem]] = [:]
+            var newRecent = recent
             for section in visibleSections {
-                newRecent[section.key] = (try? await client.recentlyAdded(section: section.key)) ?? []
+                if let items = try? await client.recentlyAdded(section: section.key) {
+                    newRecent[section.key] = items
+                }
             }
             recent = newRecent
+            homeError = nil
+            lastHomeLoad = Date()
         } catch {
-            errorMessage = error.localizedDescription
+            if (error as? URLError)?.code == .cancelled || error is CancellationError { return }
+            // Only worth showing when there's nothing on screen yet.
+            homeError = continueWatching.isEmpty && recent.isEmpty ? error.localizedDescription : nil
         }
     }
 

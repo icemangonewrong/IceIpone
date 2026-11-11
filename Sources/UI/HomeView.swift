@@ -7,7 +7,7 @@ struct HomeView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 28) {
-                if let err = app.errorMessage {
+                if let err = app.homeError {
                     Text(err).foregroundColor(.red).padding(.horizontal)
                 }
 
@@ -37,8 +37,9 @@ struct HomeView: View {
             if app.sections.isEmpty { await app.refreshHome() }
         }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)) { _ in
-            Task { await app.refreshContinueWatching() }
+            app.refreshHomeIfStale()
         }
+        .onAppear { app.refreshHomeIfStale() }
     }
 }
 
