@@ -113,6 +113,13 @@ final class PlaybackManager: NSObject, ObservableObject {
     private var hasPlayedSinceStart = false
     private var restartsWithoutPlaying = 0
     private var restartPending = false
+    private var pausedAt: Date?
+    private var stuckLogged = false
+
+    private func ts(_ t: Double) -> String {
+        let s = Int(max(t, 0))
+        return s >= 3600 ? String(format: "%d:%02d:%02d", s / 3600, s % 3600 / 60, s % 60) : String(format: "%d:%02d", s / 60, s % 60)
+    }
 
     private var state: AppState { AppState.shared }
     private var client: PlexClient { AppState.shared.client }
@@ -142,9 +149,9 @@ final class PlaybackManager: NSObject, ObservableObject {
             }
             target = next
         }
-        // Lists usually include the file details; only look them up if missing.
-        if target.firstPart?.key == nil || target.firstPart?.size == nil,
-           let fresh = try? await client.metadata(target.ratingKey.value) {
+        // Always ask the server for the latest details: the list this came from may be minutes old, and its
+        // resume point with it (that's what restarted videos a couple of minutes back).
+        if let fresh = try? await client.metadata(target.ratingKey.value) {
             target = fresh
         }
 
@@ -174,6 +181,8 @@ final class PlaybackManager: NSObject, ObservableObject {
         var resume = fromStart ? 0 : Double(target.viewOffset ?? 0) / 1000
         if duration > 0, resume > duration - 120 { resume = 0 }  // nearly done: start over
         currentTime = resume
+        IceLog.info("PLAY \(target.grandparentTitle.map { $0 + " " } ?? "")\(target.title ?? "") (key \(target.ratingKey.value)) from \(ts(resume))")
+        pausedAt = nil
         hasPlayedSinceStart = false
         restartsWithoutPlaying = 0
         isActive = true
@@ -241,6 +250,7 @@ final class PlaybackManager: NSObject, ObservableObject {
             return
         }
         let t = currentTime
+        IceLog.info("STOP at \(ts(t))")
         reportTimer?.invalidate()
         reportTimer = nil
         watchdog?.invalidate()
@@ -320,7 +330,6 @@ final class PlaybackManager: NSObject, ObservableObject {
         zoomScale = levels[zoomStep]
         zoomPan = .zero
         applyZoom()
-        showToast(zoomStep == 0 ? "Original size" : zoomStep == 3 ? "Zoom 3 of 3 · fill screen" : "Zoom \(zoomStep) of 3")
     }
 
     /// Pinch mode: scale by `factor` and move by `dx`,`dy`, kept inside the screen.
@@ -342,7 +351,7 @@ final class PlaybackManager: NSObject, ObservableObject {
         zoomScale = 1
         zoomPan = .zero
         applyZoom()
-        if announce && was { showToast("Original size") }
+        _ = was
     }
 
     func minimize() {
@@ -370,10 +379,22 @@ final class PlaybackManager: NSObject, ObservableObject {
         if wantsPlay {
             wantsPlay = false
             vlc.pause()
+            pausedAt = Date()
+            IceLog.info("You paused at \(ts(currentTime))")
         } else {
             if heldForMotion { return }
             wantsPlay = true
-            vlc.play()
+            let pausedFor = pausedAt.map { Date().timeIntervalSince($0) } ?? 0
+            pausedAt = nil
+            IceLog.info("You pressed play at \(ts(currentTime)) after \(Int(pausedFor)) s paused")
+            if pausedFor > 120 {
+                // After a long pause the connections behind the player may have gone stale (or iOS shut the
+                // phone's local server down while it sat locked). Reopen fresh at the same spot, like Plex does.
+                IceLog.info("Long pause: reopening at \(ts(currentTime))")
+                restartVLC(now: true)
+            } else {
+                vlc.play()
+            }
         }
         isPlaying = wantsPlay
         lastProgress = Date()
@@ -459,8 +480,9 @@ final class PlaybackManager: NSObject, ObservableObject {
     }
 
     /// Something went wrong inside VLC. Reopen at the same spot (the cache still has the data).
-    private func restartVLC() {
+    private func restartVLC(now: Bool = false, why: String = "") {
         guard isActive, !restartPending else { return }
+        if !why.isEmpty { IceLog.info("RECONNECT: \(why) at \(ts(currentTime)) [loaded \(Int(bufferedAhead)) s, offline \(offline), proxy up \(proxy?.listening ?? false)]") }
         if !hasPlayedSinceStart {
             restartsWithoutPlaying += 1
             if restartsWithoutPlaying > 3 {
@@ -470,13 +492,19 @@ final class PlaybackManager: NSObject, ObservableObject {
         }
         restartPending = true
         let at = currentTime
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+        DispatchQueue.main.asyncAfter(deadline: .now() + (now ? 0 : 2)) { [weak self] in
             guard let self, self.isActive, self.restartPending else { return }
-            self.restartPending = false
-            self.vlc?.delegate = nil
-            self.vlc?.stop()
-            self.vlc = nil
-            self.startVLC(at: at)
+            Task { @MainActor in
+                // iOS may have shut the local server down in the background: bring it back (cache kept).
+                if let p = self.proxy, let url = await p.ensureListening() { self.mediaURL = url }
+                guard self.isActive, self.restartPending else { return }
+                self.restartPending = false
+                self.vlc?.delegate = nil
+                self.vlc?.stop()
+                self.vlc = nil
+                IceLog.info("Reopening at \(self.ts(at))")
+                self.startVLC(at: at)
+            }
         }
     }
 
@@ -484,6 +512,8 @@ final class PlaybackManager: NSObject, ObservableObject {
         guard let p = vlc else { return }
         switch p.state {
         case .playing:
+            if !hasPlayedSinceStart || stuckLogged { IceLog.info("Playing at \(ts(currentTime))") }
+            stuckLogged = false
             applyDelays(to: p)   // also after reconnecting from a dead zone (new player)
             hasPlayedSinceStart = true
             restartsWithoutPlaying = 0
@@ -496,10 +526,10 @@ final class PlaybackManager: NSObject, ObservableObject {
             if duration > 0 && currentTime >= duration - 20 {
                 Task { await finished() }
             } else {
-                restartVLC()  // ended early: data hiccup, not the real end
+                restartVLC(why: "video ended early (data hiccup)")
             }
         case .error:
-            restartVLC()
+            restartVLC(why: "player error")
         default:
             break
         }
@@ -545,11 +575,18 @@ final class PlaybackManager: NSObject, ObservableObject {
         let stalled = wantsPlay && !heldForMotion && Date().timeIntervalSince(lastProgress) > 1.5
         isBuffering = stalled
         waitingForSignal = stalled && offline
-        // VLC sometimes gives up after a long dead zone. If it's been stuck a long time
-        // and data is available again, reopen it at the same spot.
-        if stalled && !offline && hasPlayedSinceStart && bufferedAhead > 5
-            && Date().timeIntervalSince(lastProgress) > 15 {
-            restartVLC()
+        // Stuck while it should be playing: reopen at the same spot. Quickly when the video is already loaded
+        // (the player itself is stuck), after longer when waiting on the connection (the cache retries on its own).
+        let stuck = Date().timeIntervalSince(lastProgress)
+        if stalled && hasPlayedSinceStart {
+            if !stuckLogged && stuck > 5 {
+                stuckLogged = true
+                IceLog.info("Stuck at \(ts(currentTime)) [loaded \(Int(bufferedAhead)) s, offline \(offline), proxy up \(proxy?.listening ?? false)]")
+            }
+            if (bufferedAhead > 5 && stuck > 10) || (proxy.map { !$0.listening } ?? false) || stuck > 30 {
+                lastProgress = Date()     // give the reopen time before trying again
+                restartVLC(why: bufferedAhead > 5 ? "frozen with video loaded" : "stuck \(Int(stuck)) s")
+            }
         }
         updateMarkers()
         if hasPlayedSinceStart { applySubtitleChoice(); preferEnglishAudio() }

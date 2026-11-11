@@ -146,6 +146,33 @@ final class StreamProxy: NSObject, URLSessionDataDelegate {
         cfg.requestCachePolicy = .reloadIgnoringLocalCacheData
         session = URLSession(configuration: cfg, delegate: self, delegateQueue: opQueue)
 
+        let url = try await listen()
+        // Start filling the cache right away (a preload waits until it's allowed).
+        q.async { if !self.hold { self.runDownload(from: 0) } }
+        return url
+    }
+
+    /// Whether the local server is still up. iOS can shut it down while the app sits in the background
+    /// (e.g. paused with the phone locked); the player then can't read anything until it's restarted.
+    private(set) var listening = false
+    private var currentURL: URL?
+
+    /// The address to give the player, restarting the local server first if iOS shut it down. The cache is kept.
+    func ensureListening() async -> URL? {
+        if listening, let u = currentURL { return u }
+        if stopped { return nil }
+        IceLog.info("proxy: local server was shut down; restarting it")
+        q.sync {
+            listener?.cancel()
+            listener = nil
+            for job in jobs.values { job.conn.cancel() }
+            jobs.removeAll()
+            activeJob = nil
+        }
+        return try? await listen()
+    }
+
+    private func listen() async throws -> URL {
         let params = NWParameters.tcp
         params.requiredInterfaceType = .loopback
         params.allowLocalEndpointReuse = true
@@ -156,15 +183,17 @@ final class StreamProxy: NSObject, URLSessionDataDelegate {
         final class Once { var done = false }
         let once = Once()
         let port: UInt16 = try await withCheckedThrowingContinuation { cont in
-            l.stateUpdateHandler = { state in
-                guard !once.done else { return }
+            l.stateUpdateHandler = { [weak self] state in
                 switch state {
                 case .ready:
-                    once.done = true
-                    cont.resume(returning: l.port?.rawValue ?? 0)
+                    self?.listening = true
+                    if !once.done { once.done = true; cont.resume(returning: l.port?.rawValue ?? 0) }
                 case .failed(let err):
-                    once.done = true
-                    cont.resume(throwing: err)
+                    if self?.listener === l { self?.listening = false }
+                    IceLog.info("proxy: local server failed: \(err)")
+                    if !once.done { once.done = true; cont.resume(throwing: err) }
+                case .cancelled:
+                    if self?.listener === l { self?.listening = false }
                 default:
                     break
                 }
@@ -174,8 +203,7 @@ final class StreamProxy: NSObject, URLSessionDataDelegate {
         guard port != 0, let url = URL(string: "http://127.0.0.1:\(port)/media") else {
             throw URLError(.cannotConnectToHost)
         }
-        // Start filling the cache right away (a preload waits until it's allowed).
-        q.async { if !self.hold { self.runDownload(from: 0) } }
+        currentURL = url
         return url
     }
 

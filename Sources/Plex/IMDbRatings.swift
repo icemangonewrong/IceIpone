@@ -14,6 +14,7 @@ final class IMDbRatings: ObservableObject {
 
     private var ids: [UInt32] = []
     private var vals: [UInt8] = []
+    private var votes: [UInt32] = []     // number of IMDb votes: how popular a title is
     private let lock = NSLock()
     private var started = false
 
@@ -24,14 +25,26 @@ final class IMDbRatings: ObservableObject {
     }
 
     func rating(_ imdbID: String?) -> Double? {
-        guard let s = imdbID, s.hasPrefix("tt"), let n = UInt32(s.dropFirst(2)) else { return nil }
         lock.lock()
         defer { lock.unlock() }
+        return index(imdbID).map { Double(vals[$0]) / 10 }
+    }
+
+    /// How many people rated it on IMDb (IMDb's own measure of popularity).
+    func voteCount(_ imdbID: String?) -> Int? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let i = index(imdbID), i < votes.count else { return nil }
+        return Int(votes[i])
+    }
+
+    private func index(_ imdbID: String?) -> Int? {
+        guard let s = imdbID, s.hasPrefix("tt"), let n = UInt32(s.dropFirst(2)) else { return nil }
         var lo = 0, hi = ids.count - 1
         while lo <= hi {
             let mid = (lo + hi) / 2
             let v = ids[mid]
-            if v == n { return Double(vals[mid]) / 10 }
+            if v == n { return mid }
             if v < n { lo = mid + 1 } else { hi = mid - 1 }
         }
         return nil
@@ -43,7 +56,7 @@ final class IMDbRatings: ObservableObject {
         DispatchQueue.global(qos: .utility).async { [weak self] in
             guard let self else { return }
             if self.loadSaved() { self.bump() }
-            if self.age() > 24 * 3600 || self.ids.isEmpty {
+            if self.age() > 24 * 3600 || self.ids.isEmpty || self.votes.count != self.ids.count {
                 Task { await self.download() }
             }
         }
@@ -64,9 +77,14 @@ final class IMDbRatings: ObservableObject {
               a.count == b.count * 4, !b.isEmpty else { return false }
         let newIDs = a.withUnsafeBytes { Array($0.bindMemory(to: UInt32.self)) }
         let newVals = [UInt8](b)
+        var newVotes: [UInt32] = []
+        if let c = try? Data(contentsOf: dir.appendingPathComponent("votes.bin")), c.count == a.count {
+            newVotes = c.withUnsafeBytes { Array($0.bindMemory(to: UInt32.self)) }
+        }
         lock.lock()
         ids = newIDs
         vals = newVals
+        votes = newVotes
         lock.unlock()
         return true
     }
@@ -77,6 +95,8 @@ final class IMDbRatings: ObservableObject {
             guard (resp as? HTTPURLResponse)?.statusCode == 200, let tsv = Self.gunzip(data) else { return }
             var newIDs: [UInt32] = []
             var newVals: [UInt8] = []
+            var newVotes: [UInt32] = []
+            newVotes.reserveCapacity(1_700_000)
             newIDs.reserveCapacity(1_700_000)
             newVals.reserveCapacity(1_700_000)
             tsv.withUnsafeBytes { (buf: UnsafeRawBufferPointer) in
@@ -94,8 +114,14 @@ final class IMDbRatings: ObservableObject {
                             var whole = 0, tenth = 0
                             while i < n, p[i] >= 0x30, p[i] <= 0x39 { whole = whole * 10 + Int(p[i] - 0x30); i += 1 }
                             if i < n, p[i] == 0x2E, i + 1 < n { tenth = Int(p[i + 1] &- 0x30); i += 2 }
+                            var count: UInt32 = 0
+                            if i < n, p[i] == 0x09 {
+                                i += 1
+                                while i < n, p[i] >= 0x30, p[i] <= 0x39 { count = count &* 10 &+ UInt32(p[i] - 0x30); i += 1 }
+                            }
                             newIDs.append(id)
                             newVals.append(UInt8(max(0, min(100, whole * 10 + tenth))))
+                            newVotes.append(count)
                         }
                     }
                     while i < n, p[i] != 0x0A { i += 1 }
@@ -107,15 +133,18 @@ final class IMDbRatings: ObservableObject {
                 let order = newIDs.indices.sorted { newIDs[$0] < newIDs[$1] }
                 newIDs = order.map { newIDs[$0] }
                 newVals = order.map { newVals[$0] }
+                newVotes = order.map { newVotes[$0] }
             }
             let idData = newIDs.withUnsafeBufferPointer { Data(buffer: $0) }
             try? idData.write(to: dir.appendingPathComponent("ids.bin"), options: .atomic)
             try? Data(newVals).write(to: dir.appendingPathComponent("ratings.bin"), options: .atomic)
+            try? newVotes.withUnsafeBufferPointer { Data(buffer: $0) }.write(to: dir.appendingPathComponent("votes.bin"), options: .atomic)
             try? String(Date().timeIntervalSince1970).write(to: dir.appendingPathComponent("stamp"), atomically: true,
                                                             encoding: .utf8)
             lock.lock()
             ids = newIDs
             vals = newVals
+            votes = newVotes
             lock.unlock()
             bump()
         } catch {

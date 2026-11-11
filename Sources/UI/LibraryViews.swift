@@ -34,7 +34,11 @@ struct LibraryGridView: View {
         case added = "addedAt:desc"
         case released = "originallyAvailableAt:desc"
         case lastViewed = "lastViewedAt:desc"
+        case imdb = "imdb"
+        case popular = "popular"
         var id: String { rawValue }
+        /// Sorted on the phone with IMDb's numbers (Plex can't sort by these), so the whole library is loaded.
+        var local: Bool { self == .imdb || self == .popular }
         var label: String {
             switch self {
             case .title: return "Title"
@@ -42,6 +46,8 @@ struct LibraryGridView: View {
             case .added: return "Recently added"
             case .released: return "Release date"
             case .lastViewed: return "Recently watched"
+            case .imdb: return "IMDb rating"
+            case .popular: return "Popular (IMDb votes)"
             }
         }
     }
@@ -104,6 +110,24 @@ struct LibraryGridView: View {
         loading = true
         defer { loading = false }
         do {
+            if sort.local {
+                var all: [PlexItem] = []
+                while true {
+                    let page = try await app.client.items(section: section.key, sort: "titleSort",
+                                                          unwatchedOnly: unwatchedOnly, start: all.count, size: 300)
+                    all.append(contentsOf: page.items)
+                    if page.items.count < 300 || (page.total.map { all.count >= $0 } ?? false) { break }
+                }
+                let imdb = IMDbRatings.shared
+                let key: (PlexItem) -> Double = sort == .imdb
+                    ? { $0.imdbRating ?? -1 }
+                    : { Double(imdb.voteCount($0.imdbID) ?? -1) }
+                let keyed = all.map { (key($0), $0) }
+                items = keyed.sorted { $0.0 > $1.0 }.map { $0.1 }
+                total = items.count
+                error = nil
+                return
+            }
             let page = try await app.client.items(section: section.key, sort: sort.rawValue,
                                                   unwatchedOnly: unwatchedOnly,
                                                   start: items.count, size: pageSize)

@@ -1,3 +1,4 @@
+import UIKit
 import SwiftUI
 
 struct SearchView: View {
@@ -237,6 +238,9 @@ struct SettingsView: View {
 
             SeerrSettingsSection()
 
+            Section(header: Text("Log file"), footer: Text("Ice keeps a log of what the player does: freezes, reconnects, pausing, connection drops. If something goes wrong, share it (Messages, Mail, Files) and send it in.")) {
+                Button("Share log file") { shareLog() }
+            }
             Section(header: Text("About"), footer: Text("The newest build number is shown on the download page.")) {
                 Text("Ice for iPhone  ·  build \(Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?")")
                 Button("Check for updates") {
@@ -277,5 +281,21 @@ struct SeerrSettingsSection: View {
             if !result.isEmpty { Text(result).font(.footnote).foregroundColor(.secondary) }
         }
         .onDisappear { SeerrClient.savedURL = url }
+    }
+}
+
+
+extension SettingsView {
+    func shareLog() {
+        let files = IceLog.filesToShare()
+        guard !files.isEmpty else { return }
+        let vc = UIActivityViewController(activityItems: files, applicationActivities: nil)
+        guard let scene = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene })
+                .first(where: { $0.activationState == .foregroundActive }) ?? UIApplication.shared.connectedScenes.first as? UIWindowScene,
+              var top = scene.windows.first(where: { $0.isKeyWindow })?.rootViewController ?? scene.windows.first?.rootViewController
+        else { return }
+        while let next = top.presentedViewController { top = next }
+        vc.popoverPresentationController?.sourceView = top.view
+        top.present(vc, animated: true)
     }
 }
