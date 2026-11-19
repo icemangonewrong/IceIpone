@@ -214,7 +214,7 @@ final class PlaybackManager: NSObject, ObservableObject {
         if proxy == nil, Self.airPlayRouteName() == nil, let size = target.firstPart?.size, size > 0, duration > 0 {
             let p = StreamProxy(remote: remote, size: size, duration: duration,
                                 aheadSeconds: Double(state.bufferMinutes * 60),
-                                container: target.container)
+                                container: target.container, key: target.ratingKey.value)
             if let local = try? await p.start() {
                 proxy = p
                 url = local
@@ -287,7 +287,7 @@ final class PlaybackManager: NSObject, ObservableObject {
         // Report in the background so the next video doesn't wait on these calls.
         Task {
             await c.reportTimeline(item: item, state: "stopped", timeMs: Int(t * 1000), durationMs: durMs)
-            if watched { await c.markWatched(item.ratingKey.value) }
+            if watched { await c.markWatched(item.ratingKey.value); VideoStore.drop(key: item.ratingKey.value) }
             if refresh { await AppState.shared.refreshContinueWatching() }
         }
     }
@@ -611,7 +611,8 @@ final class PlaybackManager: NSObject, ObservableObject {
             DispatchQueue.global(qos: .utility).async { w.proxy.stop() }
         }
         let p = StreamProxy(remote: remote, size: size, duration: dur, aheadSeconds: Double(state.bufferMinutes * 60),
-                            container: item.container, preloadSeconds: 10, preloadAt: at)
+                            container: item.container, preloadSeconds: 10, preloadAt: at,
+                            key: item.ratingKey.value)
         warmedAt = at
         Task {
             guard let local = try? await p.start() else {
@@ -652,7 +653,8 @@ final class PlaybackManager: NSObject, ObservableObject {
                   let remote = c.directURL(for: full), let size = full.firstPart?.size, size > 0,
                   let dur = full.duration, dur > 0 else { return }
             let p = StreamProxy(remote: remote, size: size, duration: Double(dur) / 1000,
-                                aheadSeconds: Double(minutes * 60), container: full.container, preloadSeconds: 20)
+                                aheadSeconds: Double(minutes * 60), container: full.container, preloadSeconds: 20,
+                                key: full.ratingKey.value)
             guard let local = try? await p.start() else {
                 DispatchQueue.global(qos: .utility).async { p.stop() }
                 return
@@ -686,6 +688,7 @@ final class PlaybackManager: NSObject, ObservableObject {
         await stop(reportOnly: next != nil)
         if let next {
             await client.markWatched(item.ratingKey.value)
+            VideoStore.drop(key: item.ratingKey.value)
             await play(next, fromStart: true)
         }
     }
@@ -725,7 +728,7 @@ final class PlaybackManager: NSObject, ObservableObject {
         upNextDeadline = nil
         if markWatched, let leaving {
             let c = client
-            Task { await c.markWatched(leaving.ratingKey.value) }
+            Task { await c.markWatched(leaving.ratingKey.value); VideoStore.drop(key: leaving.ratingKey.value) }
         }
         await play(other, fromStart: true)
         switching = false

@@ -491,7 +491,7 @@ private struct WatchedButton: View {
             Task {
                 working = true
                 if watched { await app.client.markUnwatched(item.ratingKey.value) }
-                else { await app.client.markWatched(item.ratingKey.value) }
+                else { await app.client.markWatched(item.ratingKey.value); VideoStore.drop(key: item.ratingKey.value) }
                 await reload()
                 await app.refreshContinueWatching()
                 working = false

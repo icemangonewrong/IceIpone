@@ -195,13 +195,15 @@ struct SettingsView: View {
                 }
             }
 
-            Section(header: Text("Buffering"), footer: Text("How much video to download ahead so it keeps playing through dead spots. It's saved on the phone's storage (not memory) and deleted when you stop watching. Also keeps loading while paused, so you can pause before a known dead zone and let it fill up.")) {
+            Section(header: Text("Buffering"), footer: Text("How much video to download ahead so it keeps playing through dead spots. It's saved on the phone's storage (not memory). Also keeps loading while paused, so you can pause before a known dead zone and let it fill up.")) {
                 Picker("Load ahead", selection: $app.bufferMinutes) {
                     ForEach(AppState.bufferChoices, id: \.self) { m in
                         Text("\(m) min").tag(m)
                     }
                 }
             }
+
+            KeepVideoSection()
 
             Section(header: Text("Player"), footer: Text("When this is off, tapping the video just shows or hides the controls.")) {
                 Toggle("Pause when the screen is tapped", isOn: $app.tapToPause)
@@ -297,5 +299,37 @@ extension SettingsView {
         while let next = top.presentedViewController { top = next }
         vc.popoverPresentationController?.sourceView = top.view
         top.present(vc, animated: true)
+    }
+}
+
+
+/// Settings: keep downloaded video on the phone until it's watched.
+struct KeepVideoSection: View {
+    @State private var gb = VideoStore.limitGB
+    @State private var used: Int64 = 0
+
+    var body: some View {
+        Section(header: Text("Keep downloaded video"),
+                footer: Text("Whatever's been downloaded stays on the phone until you've watched it, so closing and reopening a video (even after closing the app) doesn't download it again. Over the limit, the videos played longest ago are deleted first. Using \(String(format: "%.1f", Double(used) / 1e9)) GB now.")) {
+            Picker("Keep", selection: $gb) {
+                ForEach(VideoStore.choices, id: \.self) { g in
+                    Text(g == 0 ? "Off" : "Up to \(g) GB").tag(g)
+                }
+            }
+            .onChange(of: gb) { g in
+                VideoStore.limitGB = g
+                if g == 0 { VideoStore.clear() }
+                refresh()
+            }
+            Button("Delete saved video") { VideoStore.clear(); refresh() }
+        }
+        .onAppear { refresh() }
+    }
+
+    private func refresh() {
+        DispatchQueue.global(qos: .utility).async {
+            let n = VideoStore.usageBytes()
+            DispatchQueue.main.async { used = n }
+        }
     }
 }

@@ -39,6 +39,8 @@ final class StreamProxy: NSObject, URLSessionDataDelegate {
     private let chunkSize: Int64 = 4 * 1024 * 1024
     private let sendSize: Int64 = 512 * 1024
     private let dir: URL
+    /// Kept after the player closes (until watched); see VideoStore.
+    private let keeps: Bool
 
     // MARK: - State (only touched on `q`)
 
@@ -74,7 +76,7 @@ final class StreamProxy: NSObject, URLSessionDataDelegate {
     /// - Parameters:
     ///   - aheadSeconds: how much video to keep loaded ahead of the player.
     init(remote: URL, size: Int64, duration: Double, aheadSeconds: Double, container: String?,
-         preloadSeconds: Double? = nil, preloadAt: Double = 0) {
+         preloadSeconds: Double? = nil, preloadAt: Double = 0, key: String? = nil) {
         self.remote = remote
         self.size = size
         self.bytesPerSecond = max(Double(size) / max(duration, 1), 50_000)
@@ -111,8 +113,21 @@ final class StreamProxy: NSObject, URLSessionDataDelegate {
             plan = p.filter { $0.start >= 0 && $0.start < size }.map { ($0.start, min($0.count, size - $0.start)) }
         }
 
-        dir = StreamProxy.cacheRoot.appendingPathComponent("stream-" + UUID().uuidString, isDirectory: true)
+        if let key, let kept = VideoStore.claim(key: key, size: size) {
+            dir = kept
+            keeps = true
+        } else {
+            dir = StreamProxy.cacheRoot.appendingPathComponent("stream-" + UUID().uuidString, isDirectory: true)
+            keeps = false
+        }
         super.init()
+        if keeps {
+            // Whatever was downloaded last time is already here.
+            chunks = VideoStore.savedChunks(in: dir).filter { $0.value <= chunkLength($0.key) }
+            if !chunks.isEmpty {
+                IceLog.info("Saved video: \(chunks.values.reduce(0, +) / 1_000_000) MB already on the phone for \(key ?? "")")
+            }
+        }
     }
 
     static var cacheRoot: URL {
@@ -222,7 +237,7 @@ final class StreamProxy: NSObject, URLSessionDataDelegate {
             try? writeHandle?.close()
             writeHandle = nil
         }
-        try? FileManager.default.removeItem(at: dir)
+        if keeps { VideoStore.release(dir) } else { try? FileManager.default.removeItem(at: dir) }
     }
 
     /// Preload only: let it download (true) or hold it so the playing video gets the bandwidth (false).
@@ -372,7 +387,8 @@ final class StreamProxy: NSObject, URLSessionDataDelegate {
     /// player first (behind counts double). Chunks around the player are never dropped,
     /// so VLC peeking at the end of an MKV file doesn't wipe out the start.
     private func trim() {
-        let budget = aheadLimit + behindLimit
+        // Keeping downloads: only trim inside this video if it alone would go over the overall limit.
+        let budget = keeps ? max(aheadLimit + behindLimit, VideoStore.limitBytes) : aheadLimit + behindLimit
         var total = chunks.values.reduce(0, +)
         guard total > budget else { return }
         let protectLow = readPos - 64 * 1024 * 1024
