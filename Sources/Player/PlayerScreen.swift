@@ -68,12 +68,14 @@ private struct PlayerView: View {
 
                 // Tap the picture: pause/play if that's turned on in Settings, otherwise show/hide the bar.
                 // Double tap: zoom in 3 steps, 4th back to normal. Pinch: zoom to any size, drag to move.
-                Color.clear
-                    .contentShape(Rectangle())
-                    .ignoresSafeArea()
-                    .onTapGesture(count: 2) { playback.zoomStepTap(in: geo.size) }
-                    .onTapGesture { tapped() }
-                    .simultaneousGesture(pinchGesture(geo.size))
+                // iOS's own touch handling (SwiftUI's taps + pinch fight each other on iOS 14).
+                TouchLayer(
+                    onTap: { tapped() },
+                    onDoubleTap: { playback.zoomStepTap(in: geo.size) },
+                    onPinch: { factor, dx, dy in playback.pinch(factor: factor, dx: dx, dy: dy, in: geo.size) },
+                    canPan: { playback.zoomScale > 1 }
+                )
+                .ignoresSafeArea()
 
                 if let tv = playback.castingTo {
                     VStack(spacing: 14) {
@@ -742,4 +744,85 @@ func timeString(_ seconds: Double) -> String {
     let s = Int(seconds)
     let h = s / 3600, m = (s % 3600) / 60, sec = s % 60
     return h > 0 ? String(format: "%d:%02d:%02d", h, m, sec) : String(format: "%d:%02d", m, sec)
+}
+
+
+/// Taps, double taps, pinch and (when zoomed) drag on the picture, using UIKit gesture recognizers so they
+/// behave the same on every iOS version: a single tap waits only for a possible second tap, pinch never
+/// blocks taps, and a one-finger drag only moves the picture when it's zoomed in.
+private struct TouchLayer: UIViewRepresentable {
+    var onTap: () -> Void
+    var onDoubleTap: () -> Void
+    var onPinch: (CGFloat, CGFloat, CGFloat) -> Void
+    var canPan: () -> Bool
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    func makeUIView(context: Context) -> UIView {
+        let v = UIView()
+        v.backgroundColor = .clear
+        let c = context.coordinator
+        let double = UITapGestureRecognizer(target: c, action: #selector(Coordinator.doubleTap))
+        double.numberOfTapsRequired = 2
+        let single = UITapGestureRecognizer(target: c, action: #selector(Coordinator.tap))
+        single.require(toFail: double)
+        let pinch = UIPinchGestureRecognizer(target: c, action: #selector(Coordinator.pinch(_:)))
+        let pan = UIPanGestureRecognizer(target: c, action: #selector(Coordinator.pan(_:)))
+        pan.maximumNumberOfTouches = 2
+        for g in [double, single, pinch, pan] as [UIGestureRecognizer] {
+            g.delegate = c
+            v.addGestureRecognizer(g)
+        }
+        c.panRecognizer = pan
+        return v
+    }
+
+    func updateUIView(_ uiView: UIView, context: Context) {
+        context.coordinator.parent = self
+    }
+
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+        var parent: TouchLayer
+        weak var panRecognizer: UIPanGestureRecognizer?
+        private var lastScale: CGFloat = 1
+        private var lastPan: CGPoint = .zero
+
+        init(_ p: TouchLayer) { parent = p }
+
+        @objc func tap() { parent.onTap() }
+        @objc func doubleTap() { parent.onDoubleTap() }
+
+        @objc func pinch(_ g: UIPinchGestureRecognizer) {
+            switch g.state {
+            case .began: lastScale = 1
+            case .changed:
+                parent.onPinch(g.scale / lastScale, 0, 0)
+                lastScale = g.scale
+            default: lastScale = 1
+            }
+        }
+
+        @objc func pan(_ g: UIPanGestureRecognizer) {
+            let t = g.translation(in: g.view)
+            switch g.state {
+            case .began: lastPan = .zero
+            case .changed:
+                parent.onPinch(1, t.x - lastPan.x, t.y - lastPan.y)
+                lastPan = t
+            default: lastPan = .zero
+            }
+        }
+
+        func gestureRecognizerShouldBegin(_ g: UIGestureRecognizer) -> Bool {
+            if g === panRecognizer { return parent.canPan() || g.numberOfTouches >= 2 }
+            return true
+        }
+
+        func gestureRecognizer(_ g: UIGestureRecognizer,
+                               shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
+            // Pinch and drag together (move while zooming); taps stay separate.
+            (g is UIPinchGestureRecognizer || g is UIPanGestureRecognizer)
+                && (other is UIPinchGestureRecognizer || other is UIPanGestureRecognizer)
+        }
+    }
 }
