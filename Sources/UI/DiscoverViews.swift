@@ -678,8 +678,7 @@ struct TitleView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                RemoteImage(url: info?.result.backdrop ?? result.backdrop) { Rectangle().fill(Color.white.opacity(0.06)) }
-                    .frame(maxWidth: .infinity).frame(height: 230).clipped()
+                HeroImage(url: info?.result.backdrop ?? result.backdrop, height: 230)
                     .overlayCompat {
                         LinearGradient(gradient: Gradient(colors: [.black.opacity(0.35), .clear, .black]),
                                        startPoint: .top, endPoint: .bottom)
@@ -1127,8 +1126,7 @@ struct CollectionView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 if let c {
-                    RemoteImage(url: c.backdrop) { Rectangle().fill(Color.white.opacity(0.06)) }
-                        .frame(maxWidth: .infinity).frame(height: 200).clipped()
+                    HeroImage(url: c.backdrop, height: 200)
                         .overlayCompat { LinearGradient(gradient: Gradient(colors: [.clear, .black]), startPoint: .top, endPoint: .bottom) }
                     VStack(alignment: .leading, spacing: 10) {
                         Text(c.name).font(.title2.bold())

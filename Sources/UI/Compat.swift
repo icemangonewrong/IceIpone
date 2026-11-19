@@ -301,3 +301,20 @@ extension URLSession {
         try await dataCompat(for: URLRequest(url: url))
     }
 }
+
+
+/// A wide picture across the top of a page. The picture is laid over a fixed-size frame instead of sizing
+/// it, because on iOS 14 a "fill" picture inside a scrolling page makes the whole page wider than the
+/// screen (the left edge ends up cut off).
+struct HeroImage: View {
+    let url: URL?
+    let height: CGFloat
+
+    var body: some View {
+        Color.clear
+            .frame(maxWidth: .infinity)
+            .frame(height: height)
+            .overlay(RemoteImage(url: url) { Rectangle().fill(Color.white.opacity(0.06)) })
+            .clipped()
+    }
+}

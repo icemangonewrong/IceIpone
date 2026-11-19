@@ -399,12 +399,7 @@ private struct Backdrop: View {
     let path: String?
 
     var body: some View {
-        RemoteImage(url: app.client.imageURL(path, width: 1280, height: 720)) {
-                Rectangle().fill(Color.white.opacity(0.06))
-            }
-        .frame(maxWidth: .infinity)
-        .frame(height: 250)
-        .clipped()
+        HeroImage(url: app.client.imageURL(path, width: 1280, height: 720), height: 250)
         .overlayCompat {
             LinearGradient(gradient: Gradient(colors: [.black.opacity(0.35), .clear, .black]),
                            startPoint: .top, endPoint: .bottom)
@@ -561,7 +556,7 @@ private struct FileInfoView: View {
         let text = values.compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
         if !text.isEmpty {
             HStack(alignment: .firstTextBaseline, spacing: 16) {
-                Text(label).foregroundColor(.secondary).frame(width: 44, alignment: .leading)
+                Text(label).foregroundColor(.secondary).frame(width: 56, alignment: .leading).lineLimit(1)
                 Text(text)
             }
         }
