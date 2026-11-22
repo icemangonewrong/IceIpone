@@ -259,6 +259,7 @@ final class StreamProxy: NSObject, URLSessionDataDelegate {
     func loadToEnd() {
         q.async {
             guard !self.preloading, !self.stopped, self.aheadLimit < self.size else { return }
+            IceLog.info("Last minutes: loading to the end of the video")
             self.aheadLimit = self.size
             if let t = self.task, self.paused { t.resume(); self.paused = false }
             else if self.task == nil, !self.retryPending { self.runDownload(from: self.readPos) }
@@ -465,14 +466,20 @@ final class StreamProxy: NSObject, URLSessionDataDelegate {
             return
         }
         let ahead = downloadPos - readPos
-        if !paused && ahead > aheadLimit {
-            t.suspend()
-            paused = true
-        } else if paused && ahead < aheadLimit * 9 / 10 {
-            t.resume()
+        if ahead > aheadLimit {
+            // Far enough ahead: stop the download outright. (Pausing the request isn't enough: over some
+            // connections iOS keeps pulling data in anyway, which let it run 30+ minutes past the setting.)
+            // It starts again from the first missing byte once the player gets within 90% of the limit.
+            t.cancel()
+            task = nil
             paused = false
+            if !loggedPause {
+                loggedPause = true
+                IceLog.info("Download paused: \(ahead / 1_000_000) MB loaded ahead (setting allows \(aheadLimit / 1_000_000) MB)")
+            }
         }
     }
+    private var loggedPause = false
 
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask,
                     didReceive response: URLResponse,
