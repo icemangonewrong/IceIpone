@@ -750,39 +750,47 @@ struct TitleView: View {
     @ViewBuilder
     private func buttons(_ info: SeerrTitle) -> some View {
         let st = info.result.status
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 10) {
-                if st == SeerrClient.available || st == SeerrClient.partial {
+        VStack(alignment: .leading, spacing: 10) {
+            // Two rows (Play · Open, then Request · Trailer) so the labels never get squeezed onto one letter
+            // per line when a partly available show has all four buttons.
+            if st == SeerrClient.available || st == SeerrClient.partial {
+                HStack(spacing: 10) {
                     if let lib = libItem {
                         Button { Task { await playFromLibrary(app, playback, lib) } } label: {
-                            Label("Play", systemImage: "play.fill").font(.headline).frame(maxWidth: .infinity).padding(.vertical, 4)
+                            Label("Play", systemImage: "play.fill").font(.headline).lineLimit(1)
+                                .frame(maxWidth: .infinity).padding(.vertical, 4)
                         }
                         .prominentButton()
                         NavigationLink(destination: LoadItemView(key: lib.ratingKey.value)) {
-                            Text("Open").padding(.vertical, 4)
+                            Text("Open").lineLimit(1).fixedSize().padding(.vertical, 4).padding(.horizontal, 8)
                         }
                         .borderedButton()
                     } else {
                         OrangeSpinner(size: 22)
                     }
                 }
+                .largeControl()
+            }
+            HStack(spacing: 10) {
                 if state == "done" {
-                    Label("Requested", systemImage: "checkmark.circle.fill").foregroundColor(Color.ice)
+                    Label("Requested", systemImage: "checkmark.circle.fill").foregroundColor(Color.ice).lineLimit(1)
                 } else if info.result.kind == "movie" && (st == SeerrClient.pending || st == SeerrClient.processing) {
-                    Label("Requested", systemImage: "clock.fill").foregroundColor(reqAmber)
+                    Label("Requested", systemImage: "clock.fill").foregroundColor(reqAmber).lineLimit(1)
                 } else if canRequest(info) {
                     Button { send(info) } label: {
                         Label(state == "working" ? "Requesting…" : "Request", systemImage: "plus")
-                            .font(.headline).frame(maxWidth: .infinity).padding(.vertical, 4)
+                            .font(.headline).lineLimit(1).frame(maxWidth: .infinity).padding(.vertical, 4)
                     }
                     .prominentButton()
                     .disabled(state == "working" || (info.result.kind == "tv" && picked.isEmpty))
                 } else if info.result.kind == "tv" {
                     Text("Every season is in your library or requested.").font(.footnote).foregroundColor(.secondary)
+                    Spacer(minLength: 0)
                 }
                 if let t = info.trailer {
                     Button { UIApplication.shared.open(t) } label: {
-                        Label("Trailer", systemImage: "play.rectangle").padding(.vertical, 4)
+                        Label("Trailer", systemImage: "play.rectangle").lineLimit(1).fixedSize()
+                            .padding(.vertical, 4).padding(.horizontal, 8)
                     }
                     .borderedButton()
                 }
