@@ -668,6 +668,8 @@ struct TitleView: View {
     @State private var recs: [SeerrResult] = []
     @State private var error: String?
     @State private var picked: Set<Int> = []
+    @State private var openSeason: Int?
+    @State private var seasonEps: [Int: [SeerrEpisode]] = [:]
     @State private var state = ""          // "", "working", "done"
     @State private var requestError: String?
 
@@ -805,24 +807,88 @@ struct TitleView: View {
         return info.seasons.contains { !locked($0.status) }
     }
 
+    /// Seasons: the circle picks a season to request; tapping the rest of the row opens its episodes (number,
+    /// name, air date, summary and picture), like Seerr.
     private func seasonPicker(_ info: SeerrTitle) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 8) {
             ForEach(info.seasons) { s in
-                Button {
-                    guard !locked(s.status), state != "done" else { return }
-                    if picked.contains(s.number) { picked.remove(s.number) } else { picked.insert(s.number) }
-                } label: {
-                    HStack {
-                        Image(systemName: (locked(s.status) || picked.contains(s.number)) ? "checkmark.circle.fill" : "circle")
-                            .foregroundColor(locked(s.status) ? .secondary : Color.ice)
-                        Text(s.name).foregroundColor(.white)
-                        Text(["\(s.episodes) ep", SeerrClient.statusText[s.status]].compactMap { $0 }.joined(separator: " · "))
-                            .font(.caption).foregroundColor(.secondary)
-                        Spacer()
+                VStack(alignment: .leading, spacing: 0) {
+                    HStack(spacing: 10) {
+                        Button {
+                            guard !locked(s.status), state != "done" else { return }
+                            if picked.contains(s.number) { picked.remove(s.number) } else { picked.insert(s.number) }
+                        } label: {
+                            Image(systemName: (locked(s.status) || picked.contains(s.number)) ? "checkmark.circle.fill" : "circle")
+                                .font(.title3)
+                                .foregroundColor(locked(s.status) ? .secondary : Color.ice)
+                        }
+                        .plainButton()
+                        Button { toggleSeason(info, s.number) } label: {
+                            HStack {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(s.name).foregroundColor(.white)
+                                    Text(([s.airDate.isEmpty ? nil : niceDate(s.airDate), "\(s.episodes) ep",
+                                           SeerrClient.statusText[s.status]] as [String?]).compactMap { $0 }.joined(separator: " · "))
+                                        .font(.caption).foregroundColor(.secondary)
+                                }
+                                Spacer()
+                                Image(systemName: openSeason == s.number ? "chevron.up" : "chevron.down")
+                                    .foregroundColor(.secondary)
+                            }
+                            .contentShape(Rectangle())
+                        }
+                        .plainButton()
+                    }
+                    .padding(.vertical, 8)
+                    if openSeason == s.number {
+                        seasonEpisodeList(s.number)
                     }
                 }
-                .plainButton()
+                .padding(.horizontal, 12)
+                .background(RoundedRectangle(cornerRadius: 12).fill(Color.white.opacity(0.06)))
             }
+        }
+    }
+
+    private func toggleSeason(_ info: SeerrTitle, _ n: Int) {
+        if openSeason == n { openSeason = nil; return }
+        openSeason = n
+        guard seasonEps[n] == nil, let sr = seerr(app) else { return }
+        let id = info.result.id
+        Task {
+            let eps = (try? await sr.seasonEpisodes(id, n)) ?? []
+            await MainActor.run { seasonEps[n] = eps.sorted { $0.number > $1.number } }
+        }
+    }
+
+    @ViewBuilder
+    private func seasonEpisodeList(_ n: Int) -> some View {
+        if let eps = seasonEps[n] {
+            VStack(alignment: .leading, spacing: 14) {
+                ForEach(eps, id: \.number) { e in
+                    VStack(alignment: .leading, spacing: 6) {
+                        Divider()
+                        Text("\(e.number) - \(e.name)").font(.headline)
+                        Text(e.airDate.isEmpty ? "Date not announced" : niceDate(e.airDate))
+                            .font(.caption.weight(.semibold))
+                            .padding(.horizontal, 8).padding(.vertical, 3)
+                            .background(Capsule().fill(Color.white.opacity(0.12)))
+                        if !e.overview.isEmpty {
+                            Text(e.overview).font(.subheadline).foregroundColor(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        if let still = e.still {
+                            Color.clear.aspectRatio(16 / 9, contentMode: .fit)
+                                .overlay(RemoteImage(url: still) { Rectangle().fill(Color.white.opacity(0.06)) })
+                                .clipShape(RoundedRectangle(cornerRadius: 10))
+                        }
+                    }
+                }
+                if eps.isEmpty { Text("No episode list yet.").font(.footnote).foregroundColor(.secondary) }
+            }
+            .padding(.bottom, 12)
+        } else {
+            OrangeSpinner(size: 22).padding(.vertical, 12)
         }
     }
 

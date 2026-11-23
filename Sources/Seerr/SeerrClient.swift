@@ -133,6 +133,8 @@ struct SeerrEpisode: Hashable {
     let number: Int
     let name: String
     let airDate: String
+    var overview: String = ""
+    var still: URL? = nil
 }
 
 enum SeerrError: LocalizedError {
@@ -630,7 +632,9 @@ final class SeerrClient {
         let d = try await call("GET", "/tv/\(tmdbID)/season/\(season)") as? [String: Any] ?? [:]
         return (d["episodes"] as? [[String: Any]] ?? []).compactMap { e in
             guard let n = e["episodeNumber"] as? Int else { return nil }
-            return SeerrEpisode(number: n, name: e["name"] as? String ?? "", airDate: e["airDate"] as? String ?? "")
+            let still = (e["stillPath"] as? String).flatMap { URL(string: "https://image.tmdb.org/t/p/w780" + $0) }
+            return SeerrEpisode(number: n, name: e["name"] as? String ?? "", airDate: e["airDate"] as? String ?? "",
+                                overview: e["overview"] as? String ?? "", still: still)
         }
     }
 }
