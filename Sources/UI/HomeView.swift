@@ -31,7 +31,14 @@ struct HomeView: View {
         .overlayCompat {
             if app.isLoading && app.continueWatching.isEmpty { OrangeSpinner() }
         }
-        .navigationTitle(app.server?.name ?? "Home")
+        // Server name small in the top-left corner instead of a big title taking a third of the screen.
+        .navigationBarTitleDisplayMode(.inline)
+        .navigationTitle("")
+        .toolbar {
+            ToolbarItem(placement: .navigationBarLeading) {
+                Text(app.server?.name ?? "").font(.caption.weight(.semibold)).foregroundColor(.secondary)
+            }
+        }
         .refreshableCompat { await app.refreshHome() }
         .taskCompat {
             if app.sections.isEmpty { await app.refreshHome() }
