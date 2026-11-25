@@ -182,9 +182,22 @@ final class StreamProxy: NSObject, URLSessionDataDelegate {
                 if self.task != nil && !self.paused { self.task?.cancel(); self.task = nil }
                 return
             }
-            let quiet = self.task != nil && !self.paused && Date().timeIntervalSince(self.lastDataAt) > 1.5
-            guard self.offline || self.retryPending || quiet else { return }
-            IceLog.info("proxy: connection is back; loading again")
+            // A download started (or got data) in the last 8 s is still connecting or working: leave it.
+            // Restarting it on every change while the phone brings its connections back up (cellular,
+            // VPN…) kept cutting off the attempt that would have worked.
+            let fresh = self.task != nil && Date().timeIntervalSince(self.lastDataAt) < 8
+            let quiet = self.task != nil && !self.paused && !fresh
+            guard (self.offline || self.retryPending || quiet), !fresh else { return }
+            let kinds = path.availableInterfaces.map { i -> String in
+                switch i.type {
+                case .cellular: return "cellular"
+                case .wifi: return "wifi"
+                case .wiredEthernet: return "wired"
+                case .loopback: return "loopback"
+                default: return i.name
+                }
+            }
+            IceLog.info("proxy: connection is back (\(kinds.joined(separator: ", "))); loading again")
             self.task?.cancel()
             self.task = nil
             self.retryPending = false
@@ -196,8 +209,8 @@ final class StreamProxy: NSObject, URLSessionDataDelegate {
         t.schedule(deadline: .now() + 2, repeating: 2)
         t.setEventHandler { [weak self] in
             guard let self, !self.stopped, let task = self.task, !self.paused, !self.preloading else { return }
-            guard Date().timeIntervalSince(self.lastDataAt) > 6 else { return }
-            IceLog.info("proxy: download got nothing for 6 s; starting it again")
+            guard Date().timeIntervalSince(self.lastDataAt) > 10 else { return }
+            IceLog.info("proxy: download got nothing for 10 s; starting it again")
             task.cancel()
             self.task = nil
             if !self.offline { self.offlineSince = Date() }
