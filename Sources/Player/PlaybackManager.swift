@@ -107,6 +107,7 @@ final class PlaybackManager: NSObject, ObservableObject {
     private var castBase: Double = 0       // the converted stream starts here, so the screen's 0:00 is this
     private var castSession = ""
     private var castPendingSeek: Double?
+    private var castSeekTries = 0          // resume-spot seeks sent for this video
     private var castFailures = 0
     private var proxy: StreamProxy?
     /// The next episode's first ~20 seconds, fetched near the end of this one so it starts at once.
@@ -1131,6 +1132,8 @@ final class PlaybackManager: NSObject, ObservableObject {
         castStartedAt = Date()
         castFailures = 0
         castPendingSeek = nil
+        castSeekTries = 0
+        castResumeTarget = nil
         isBuffering = true
         hasPlayedSinceStart = false
         let title = item.type == "episode"
@@ -1160,7 +1163,12 @@ final class PlaybackManager: NSObject, ObservableObject {
                 try await DLNA.load(dev, url: url, title: title, mime: mime, duration: dur)
                 guard gen == castGeneration else { return }
                 try await DLNA.play(dev)
-                if !compatible && seconds > 1 { castPendingSeek = seconds }
+                if !compatible && seconds > 1 {
+                    // Jump to the resume spot right away, so the screen doesn't start the movie from 0:00
+                    // while it's still loading. If it isn't ready yet, castTick keeps trying.
+                    castPendingSeek = seconds
+                    await castTrySeek(dev, gen: gen)
+                }
             } catch {
                 guard gen == castGeneration else { return }
                 IceLog.info("CAST: \(dev.name) refused the video: \(error.localizedDescription)")
@@ -1194,7 +1202,11 @@ final class PlaybackManager: NSObject, ObservableObject {
         }
         guard gen == castGeneration, isActive, let st else { return }
 
-        if let at = pos?.at, at > 0, castPendingSeek == nil {
+        // Right after resuming, the screen can still report a spot near 0:00 for a moment: don't take
+        // that as where you are (it would save your place as the start of the movie).
+        if let target = castResumeTarget, let at = pos?.at, at + 20 >= target { castResumeTarget = nil }
+        let notThereYet = castResumeTarget.map { t in (pos?.at ?? 0) + 20 < t } ?? false
+        if let at = pos?.at, at > 0, castPendingSeek == nil, !notThereYet {
             let t = castBase + at
             if abs(t - lastTimeValue) > 0.01 { lastProgress = Date() }
             lastTimeValue = t
@@ -1209,10 +1221,14 @@ final class PlaybackManager: NSObject, ObservableObject {
                 hasPlayedSinceStart = true
                 IceLog.info("CAST: \(dev.name) is playing")
             }
-            if let s = castPendingSeek {
-                castPendingSeek = nil
-                do { try await DLNA.seek(dev, to: s) } catch { IceLog.info("CAST: seek refused: \(error.localizedDescription)") }
-                currentTime = s
+            if castPendingSeek != nil {
+                await castTrySeek(dev, gen: gen)
+            } else if !castCompatible, castSeekTries > 0, castSeekTries < 4, let target = castResumeTarget,
+                      let at = pos?.at, at + 20 < target {
+                // Took the seek but is still near the start: send it again.
+                IceLog.info("CAST: \(dev.name) is at \(ts(at)), not \(ts(target)); jumping again")
+                castPendingSeek = target
+                await castTrySeek(dev, gen: gen)
             }
             isBuffering = false
             wantsPlay = true
@@ -1223,6 +1239,7 @@ final class PlaybackManager: NSObject, ObservableObject {
             isPlaying = false
         case "TRANSITIONING":
             isBuffering = true
+            if castPendingSeek != nil { await castTrySeek(dev, gen: gen) }
         case "STOPPED", "NO_MEDIA_PRESENT":
             if castSawPlaying {
                 isBuffering = false
@@ -1240,7 +1257,8 @@ final class PlaybackManager: NSObject, ObservableObject {
         }
 
         // Never got going: try the converted stream (CarTV may not play this file as it is), then give up.
-        if !castSawPlaying && Date().timeIntervalSince(castStartedAt) > 25 {
+        let waited = Date().timeIntervalSince(castStartedAt)
+        if !castSawPlaying && (waited > 60 || (waited > 25 && st != "TRANSITIONING")) {
             if !castCompatible {
                 IceLog.info("CAST: \(dev.name) didn't start the original file (state \(st)); trying the converted stream")
                 showToast("Trying a format \(dev.name) can play…")
@@ -1251,8 +1269,29 @@ final class PlaybackManager: NSObject, ObservableObject {
         }
     }
 
+    /// Where the screen should be after resuming (cleared once it gets there or the video changes).
+    private var castResumeTarget: Double?
+
+    /// Sends the pending resume-spot seek. Kept pending (tried again next tick) if the screen isn't ready.
+    private func castTrySeek(_ dev: DLNADevice, gen: Int) async {
+        guard let s = castPendingSeek, castSeekTries < 8 else { castPendingSeek = nil; return }
+        castSeekTries += 1
+        do {
+            try await DLNA.seek(dev, to: s)
+            guard gen == castGeneration else { return }
+            IceLog.info("CAST: jumped \(dev.name) to \(ts(s))")
+            castPendingSeek = nil
+            castResumeTarget = s
+            currentTime = s
+        } catch {
+            IceLog.info("CAST: seek to \(ts(s)) not taken yet (try \(castSeekTries)): \(error.localizedDescription)")
+        }
+    }
+
     private func castSeek(to t: Double) {
         guard let dev = castDevice else { return }
+        castResumeTarget = nil      // you picked a new spot: follow the screen from here
+        castSeekTries = 0
         currentTime = t
         lastTimeValue = t
         lastProgress = Date()
