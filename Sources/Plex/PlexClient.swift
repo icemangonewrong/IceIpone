@@ -368,6 +368,37 @@ final class PlexClient {
         return comps?.url
     }
 
+    /// For CarTV and other DLNA screens that can't play the original file: the same stream the web version uses —
+    /// the picture copied untouched, only the sound converted (to AAC), no subtitles, starting `offset` seconds in.
+    func compatibleStreamURL(for item: PlexItem, session: String, offset: Double) -> URL? {
+        guard let server else { return nil }
+        var comps = URLComponents(string: server.baseURL + "/video/:/transcode/universal/start.m3u8")
+        comps?.queryItems = [
+            URLQueryItem(name: "path", value: "/library/metadata/\(item.ratingKey.value)"),
+            URLQueryItem(name: "mediaIndex", value: "0"),
+            URLQueryItem(name: "partIndex", value: "0"),
+            URLQueryItem(name: "protocol", value: "hls"),
+            URLQueryItem(name: "offset", value: String(Int(max(offset, 0)))),
+            URLQueryItem(name: "fastSeek", value: "1"),
+            URLQueryItem(name: "directPlay", value: "0"),
+            URLQueryItem(name: "directStream", value: "1"),
+            URLQueryItem(name: "directStreamAudio", value: "0"),
+            URLQueryItem(name: "subtitles", value: "none"),
+            URLQueryItem(name: "videoQuality", value: "100"),
+            URLQueryItem(name: "maxVideoBitrate", value: "200000"),
+            URLQueryItem(name: "videoResolution", value: "3840x2160"),
+            URLQueryItem(name: "location", value: "lan"),
+            URLQueryItem(name: "session", value: session),
+            URLQueryItem(name: "X-Plex-Session-Identifier", value: session),
+            URLQueryItem(name: "X-Plex-Client-Identifier", value: clientIdentifier),
+            URLQueryItem(name: "X-Plex-Product", value: Self.product),
+            URLQueryItem(name: "X-Plex-Platform", value: "iOS"),
+            URLQueryItem(name: "X-Plex-Device", value: "CarTV"),
+            URLQueryItem(name: "X-Plex-Token", value: server.accessToken),
+        ]
+        return comps?.url
+    }
+
     func stopCast(session: String) async {
         _ = try? await serverGET("/video/:/transcode/universal/stop", query: [URLQueryItem(name: "session", value: session)])
     }

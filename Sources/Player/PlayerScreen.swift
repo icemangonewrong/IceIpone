@@ -78,10 +78,13 @@ private struct PlayerView: View {
                 .ignoresSafeArea()
 
                 if let tv = playback.castingTo {
+                    let dlna = playback.castDevice != nil
                     VStack(spacing: 14) {
-                        Image(systemName: "airplayvideo").font(.system(size: 60, weight: .light)).foregroundColor(Color.ice)
+                        Image(systemName: dlna ? "tv" : "airplayvideo").font(.system(size: 60, weight: .light)).foregroundColor(Color.ice)
                         Text("Playing on \(tv)").font(.title3.bold())
-                        Text("Use these controls or the TV remote. Tap the AirPlay button to bring it back to the phone.")
+                        Text(dlna
+                             ? "Use these controls — you can leave Ice and it keeps playing. Tap the Cast button to bring it back to the phone."
+                             : "Use these controls or the TV remote. Tap the AirPlay button to bring it back to the phone.")
                             .font(.footnote).foregroundColor(.white.opacity(0.7)).multilineTextAlignment(.center)
                             .padding(.horizontal, 40)
                     }
@@ -150,13 +153,16 @@ private struct PlayerView: View {
                         .padding(.top, 8)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                         .transition(.opacity)
-                    AirPlayButton()
-                        .frame(width: 44, height: 44)
-                        .bg(.black.opacity(0.45), Circle())
-                        .padding(.trailing, 16)
-                        .padding(.top, 8)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-                        .transition(.opacity)
+                    HStack(spacing: 12) {
+                        CastButton(onClose: scheduleHide, onOpen: { hideTask?.cancel() })
+                        AirPlayButton()
+                            .frame(width: 44, height: 44)
+                            .bg(.black.opacity(0.45), Circle())
+                    }
+                    .padding(.trailing, 16)
+                    .padding(.top, 8)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                    .transition(.opacity)
                     bar(compact: compact)
                         .transition(.opacity)
                 }
@@ -591,6 +597,10 @@ private struct ErrorPanel: View {
         VStack(spacing: 16) {
             Image(systemName: "exclamationmark.triangle").font(.largeTitle)
             Text(message).multilineTextAlignment(.center)
+            if playback.castDevice != nil {
+                Button("Play on this iPhone") { playback.castBackToPhone() }
+                    .prominentButton().iceTint(Color.ice)
+            }
             Button("Close") { Task { await playback.stop() } }
                 .prominentButton().iceTint(Color.ice)
         }
@@ -823,6 +833,105 @@ private struct TouchLayer: UIViewRepresentable {
             // Pinch and drag together (move while zooming); taps stay separate.
             (g is UIPinchGestureRecognizer || g is UIPanGestureRecognizer)
                 && (other is UIPinchGestureRecognizer || other is UIPanGestureRecognizer)
+        }
+    }
+}
+
+// MARK: - Cast to CarTV
+
+/// Sends the video to CarTV (or another DLNA / UPnP screen). The sheet hangs off this button so it works on iOS 14.
+struct CastButton: View {
+    @EnvironmentObject var playback: PlaybackManager
+    var onClose: () -> Void = {}
+    var onOpen: () -> Void = {}
+    @State private var open = false
+
+    var body: some View {
+        Button {
+            onOpen()
+            open = true
+        } label: {
+            Image(systemName: playback.castDevice != nil ? "tv.fill" : "tv")
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundColor(playback.castDevice != nil ? Color.ice : .white)
+                .frame(width: 44, height: 44)
+                .bg(.black.opacity(0.45), Circle())
+        }
+        .sheet(isPresented: $open, onDismiss: onClose) {
+            CastSheet { open = false }.environmentObject(playback)
+        }
+    }
+}
+
+struct CastSheet: View {
+    @EnvironmentObject var playback: PlaybackManager
+    let done: () -> Void
+    @State private var searching = false
+    @State private var found: [DLNADevice] = []
+    @State private var searched = false
+
+    var body: some View {
+        NavigationView {
+            List {
+                if let dev = playback.castDevice {
+                    Section(header: Text("Playing on")) {
+                        Label(dev.name, systemImage: "tv.fill").foregroundColor(Color.ice)
+                        Button {
+                            playback.castBackToPhone()
+                            done()
+                        } label: {
+                            Label("Play on this iPhone", systemImage: "iphone")
+                        }
+                    }
+                }
+                Section(header: Text("Screens"),
+                        footer: Text("On CarTV, open Discover → Cast from an app so it shows “Waiting for an app to cast…”, then search again. "
+                                     + "CarTV fetches the video from Plex itself, so you can leave Ice while it plays.")) {
+                    if searching {
+                        HStack(spacing: 10) {
+                            ProgressView()
+                            Text("Looking for screens…").foregroundColor(.secondary)
+                        }
+                    } else if found.isEmpty && searched {
+                        Text("No screens found.").foregroundColor(.secondary)
+                    }
+                    ForEach(found) { dev in
+                        Button {
+                            playback.castTo(dev)
+                            done()
+                        } label: {
+                            HStack {
+                                Label(dev.name, systemImage: "tv")
+                                Spacer()
+                                if playback.castDevice?.id == dev.id {
+                                    Image(systemName: "checkmark").foregroundColor(Color.ice)
+                                }
+                            }
+                        }
+                        .foregroundColor(.primary)
+                    }
+                    Button("Search again") { search() }.disabled(searching)
+                }
+            }
+            .listStyle(InsetGroupedListStyle())
+            .navigationTitle("Cast")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) { Button("Done") { done() } }
+            }
+        }
+        .navigationViewStyle(StackNavigationViewStyle())
+        .preferredColorScheme(.dark)
+        .onAppear { search() }
+    }
+
+    private func search() {
+        guard !searching else { return }
+        searching = true
+        Task { @MainActor in
+            found = await DLNA.discover()
+            searching = false
+            searched = true
         }
     }
 }

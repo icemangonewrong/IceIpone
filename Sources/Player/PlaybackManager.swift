@@ -59,6 +59,9 @@ final class PlaybackManager: NSObject, ObservableObject {
     @Published private(set) var toast: String?
     /// Name of the Apple TV (or other AirPlay screen) the video is playing on, while it is.
     @Published private(set) var castingTo: String?
+    /// CarTV (or another DLNA screen) picked with the Cast button. Videos play there — the screen fetches them
+    /// from Plex itself — until "Play on this iPhone" is picked.
+    @Published private(set) var castDevice: DLNADevice?
 
     static let upNextCountdown = 10
     private var markers: [PlexMarker] = []
@@ -94,6 +97,17 @@ final class PlaybackManager: NSObject, ObservableObject {
     private var avEndObserver: NSObjectProtocol?
     private var avSession = ""
     private var avPendingSeek: Double?
+    // DLNA casting (CarTV): Ice is the remote; it asks the screen every 2 s where it is.
+    private var castPoll: Timer?
+    private var castGeneration = 0
+    private var castPolling = false
+    private var castSawPlaying = false
+    private var castStartedAt = Date()
+    private var castCompatible = false     // sending Plex's converted stream instead of the original file
+    private var castBase: Double = 0       // the converted stream starts here, so the screen's 0:00 is this
+    private var castSession = ""
+    private var castPendingSeek: Double?
+    private var castFailures = 0
     private var proxy: StreamProxy?
     /// The next episode's first ~20 seconds, fetched near the end of this one so it starts at once.
     private var preload: (key: String, proxy: StreamProxy, url: URL, item: PlexItem, after: PlexItem?)?
@@ -211,7 +225,11 @@ final class PlaybackManager: NSObject, ObservableObject {
             preload = nil
             DispatchQueue.global(qos: .utility).async { pre.proxy.stop() }
         }
-        if proxy == nil, Self.airPlayRouteName() == nil, let size = target.firstPart?.size, size > 0, duration > 0 {
+        if castDevice != nil, let p = proxy {
+            proxy = nil   // the screen fetches the video itself
+            DispatchQueue.global(qos: .utility).async { p.stop() }
+        }
+        if proxy == nil, castDevice == nil, Self.airPlayRouteName() == nil, let size = target.firstPart?.size, size > 0, duration > 0 {
             let p = StreamProxy(remote: remote, size: size, duration: duration,
                                 aheadSeconds: Double(state.bufferMinutes * 60),
                                 container: target.container, key: target.ratingKey.value)
@@ -225,7 +243,10 @@ final class PlaybackManager: NSObject, ObservableObject {
         mediaURL = url
 
         wantsPlay = !heldForMotion
-        if Self.airPlayRouteName() != nil { startAV(at: resume) } else { startVLC(at: resume) }
+        if castDevice != nil {
+            wantsPlay = true
+            startCast(at: resume)
+        } else if Self.airPlayRouteName() != nil { startAV(at: resume) } else { startVLC(at: resume) }
         startTimers()
         updateNowPlaying()
         fetchExtras(for: target)
@@ -260,6 +281,7 @@ final class PlaybackManager: NSObject, ObservableObject {
         vlc?.stop()
         vlc = nil
         stopAV()
+        endCast(stopScreen: !reportOnly)
         let oldProxy = proxy
         proxy = nil
         mediaURL = nil
@@ -368,6 +390,17 @@ final class PlaybackManager: NSObject, ObservableObject {
     // MARK: - Controls
 
     func togglePlayPause() {
+        if let dev = castDevice, isActive {
+            wantsPlay.toggle()
+            isPlaying = wantsPlay
+            let play = wantsPlay
+            IceLog.info("CAST: you pressed \(play ? "play" : "pause") at \(ts(currentTime))")
+            Task { do { if play { try await DLNA.play(dev) } else { try await DLNA.pause(dev) } }
+                   catch { IceLog.info("CAST: \(play ? "play" : "pause") refused: \(error.localizedDescription)") } }
+            lastProgress = Date()
+            reportNow()
+            return
+        }
         if let av {
             if wantsPlay { wantsPlay = false; av.pause() } else { if heldForMotion { return }; wantsPlay = true; av.play() }
             isPlaying = wantsPlay
@@ -407,6 +440,10 @@ final class PlaybackManager: NSObject, ObservableObject {
 
     func seek(to seconds: Double) {
         let clamped = max(0, duration > 0 ? min(seconds, duration - 2) : seconds)
+        if castDevice != nil, isActive {
+            castSeek(to: clamped)
+            return
+        }
         if let av {
             av.seek(to: CMTime(seconds: clamped, preferredTimescale: 600))
             currentTime = clamped
@@ -563,6 +600,10 @@ final class PlaybackManager: NSObject, ObservableObject {
     /// Every second: buffer readout, buffering spinner, signal status.
     private func watchdogTick() {
         guard isActive else { return }
+        if castDevice != nil {
+            updateMarkers()
+            return
+        }
         if let av {
             isBuffering = wantsPlay && av.timeControlStatus == .waitingToPlayAtSpecifiedRate
             updateMarkers()
@@ -598,7 +639,7 @@ final class PlaybackManager: NSObject, ObservableObject {
     /// An info page is open: fetch ~10 s from where Play would start, so it starts at once.
     /// Skipped while something is playing, so it never takes that video's bandwidth.
     func warm(_ item: PlexItem) {
-        if isActive && wantsPlay { return }
+        if (isActive && wantsPlay) || castDevice != nil { return }
         guard item.isPlayable, let remote = client.directURL(for: item), let size = item.firstPart?.size, size > 0,
               let durMs = item.duration, durMs > 0 else { return }
         let dur = Double(durMs) / 1000
@@ -630,7 +671,7 @@ final class PlaybackManager: NSObject, ObservableObject {
     /// With 5 minutes or less left, fetch the first ~20 s of the next episode so it starts at once.
     /// Only while this episode has a comfortable cushion loaded, so it never stalls the one you're watching.
     private func preloadNextIfNeeded() {
-        guard let item = current, hasPlayedSinceStart, duration > 0, duration - currentTime <= 300 else { return }
+        guard castDevice == nil, let item = current, hasPlayedSinceStart, duration > 0, duration - currentTime <= 300 else { return }
         let left = duration - currentTime
         // Last 5 minutes: keep loading this episode all the way to its end, whatever the buffer setting.
         proxy?.loadToEnd()
@@ -922,7 +963,7 @@ final class PlaybackManager: NSObject, ObservableObject {
 
     /// Picked an AirPlay device (or went back to the phone) while something is playing: move the video over.
     private func airPlayRouteChanged() {
-        guard isActive, current != nil else { return }
+        guard isActive, current != nil, castDevice == nil else { return }
         let onAirPlay = Self.airPlayRouteName() != nil
         if onAirPlay && av == nil {
             let at = currentTime
@@ -1023,7 +1064,7 @@ final class PlaybackManager: NSObject, ObservableObject {
     }
 
     private func stopAV() {
-        guard let player = av else { castingTo = nil; return }
+        guard let player = av else { if castDevice == nil { castingTo = nil }; return }
         if let o = avTimeObserver { player.removeTimeObserver(o) }
         avTimeObserver = nil
         avObservers.forEach { $0.invalidate() }
@@ -1039,6 +1080,219 @@ final class PlaybackManager: NSObject, ObservableObject {
         let session = avSession
         let c = client
         Task { await c.stopCast(session: session) }
+    }
+
+    // MARK: - Cast to CarTV (DLNA)
+
+    /// Picked a screen in the Cast sheet: whatever is playing moves there, and later videos start there.
+    func castTo(_ dev: DLNADevice) {
+        IceLog.info("CAST: picked \(dev.name) (\(dev.control.absoluteString))")
+        castDevice = dev
+        guard isActive, current != nil else { castingTo = dev.name; return }
+        let at = currentTime
+        vlc?.delegate = nil
+        vlc?.stop()
+        vlc = nil
+        stopAV()
+        if let p = proxy {
+            proxy = nil
+            DispatchQueue.global(qos: .utility).async { p.stop() }
+        }
+        castingTo = dev.name
+        wantsPlay = true
+        // Let go of the sound so the screen's app can play it.
+        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        startCast(at: at)
+    }
+
+    /// "Play on this iPhone": stop the screen and carry on here from the same spot.
+    func castBackToPhone() {
+        guard castDevice != nil else { return }
+        IceLog.info("CAST: back to the phone at \(ts(currentTime))")
+        endCast(stopScreen: true)
+        castDevice = nil
+        castingTo = nil
+        guard isActive, let item = current else { return }
+        let at = currentTime
+        let c = client
+        Task {
+            await c.reportTimeline(item: item, state: "paused", timeMs: Int(at * 1000), durationMs: Int(duration * 1000))
+            await play(item)
+        }
+    }
+
+    private func startCast(at seconds: Double, compatible: Bool = false) {
+        guard let item = current, let dev = castDevice else { return }
+        castGeneration += 1
+        let gen = castGeneration
+        castingTo = dev.name
+        castSawPlaying = false
+        castCompatible = compatible
+        castStartedAt = Date()
+        castFailures = 0
+        castPendingSeek = nil
+        isBuffering = true
+        hasPlayedSinceStart = false
+        let title = item.type == "episode"
+            ? "\(item.grandparentTitle ?? "") · \(item.title ?? "")"
+            : (item.title ?? "Video")
+        let c = client
+        let dur = duration
+        Task { @MainActor in
+            var url: URL?
+            var mime: String
+            if compatible {
+                await c.preferEnglishAudio(item)
+                if castSession.isEmpty { castSession = UUID().uuidString }
+                castBase = seconds
+                url = c.compatibleStreamURL(for: item, session: castSession, offset: seconds)
+                mime = "application/vnd.apple.mpegurl"
+            } else {
+                castBase = 0
+                url = c.directURL(for: item)
+                mime = DLNA.mime(forContainer: item.container)
+            }
+            guard gen == castGeneration, castDevice == dev else { return }
+            guard let url else { castFailed("Couldn't find the file for this video."); return }
+            IceLog.info("CAST to \(dev.name): \(compatible ? "converted stream (sound to AAC)" : "original file (\(item.container ?? "?"))") from \(ts(seconds))")
+            do {
+                try? await DLNA.stop(dev)       // some screens won't take a new video while one is loaded
+                try await DLNA.load(dev, url: url, title: title, mime: mime, duration: dur)
+                guard gen == castGeneration else { return }
+                try await DLNA.play(dev)
+                if !compatible && seconds > 1 { castPendingSeek = seconds }
+            } catch {
+                guard gen == castGeneration else { return }
+                IceLog.info("CAST: \(dev.name) refused the video: \(error.localizedDescription)")
+                if !compatible { startCast(at: seconds, compatible: true) } else { castFailed("\(dev.name) didn't take the video. \(error.localizedDescription)") }
+            }
+        }
+        castPoll?.invalidate()
+        castPoll = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
+            Task { @MainActor in await self?.castTick() }
+        }
+    }
+
+    /// Every 2 s: where the screen is, and whether it's playing, paused or done.
+    private func castTick() async {
+        guard let dev = castDevice, isActive, !castPolling else { return }
+        castPolling = true
+        defer { castPolling = false }
+        let gen = castGeneration
+        var st: String?
+        var pos: (at: Double?, length: Double?)?
+        do {
+            st = try await DLNA.state(dev)
+            pos = try? await DLNA.position(dev)
+            castFailures = 0
+        } catch {
+            castFailures += 1
+            if castFailures == 3 {
+                IceLog.info("CAST: \(dev.name) not answering: \(error.localizedDescription)")
+                showToast("\(dev.name) isn't answering")
+            }
+        }
+        guard gen == castGeneration, isActive, let st else { return }
+
+        if let at = pos?.at, at > 0, castPendingSeek == nil {
+            let t = castBase + at
+            if abs(t - lastTimeValue) > 0.01 { lastProgress = Date() }
+            lastTimeValue = t
+            currentTime = t
+        }
+        if duration <= 0, let len = pos?.length, len > 0, !castCompatible { duration = len }
+
+        switch st {
+        case "PLAYING":
+            if !castSawPlaying {
+                castSawPlaying = true
+                hasPlayedSinceStart = true
+                IceLog.info("CAST: \(dev.name) is playing")
+            }
+            if let s = castPendingSeek {
+                castPendingSeek = nil
+                do { try await DLNA.seek(dev, to: s) } catch { IceLog.info("CAST: seek refused: \(error.localizedDescription)") }
+                currentTime = s
+            }
+            isBuffering = false
+            wantsPlay = true
+            isPlaying = true
+        case "PAUSED_PLAYBACK":
+            isBuffering = false
+            wantsPlay = false
+            isPlaying = false
+        case "TRANSITIONING":
+            isBuffering = true
+        case "STOPPED", "NO_MEDIA_PRESENT":
+            if castSawPlaying {
+                isBuffering = false
+                if duration > 0 && currentTime >= duration - 30 {
+                    IceLog.info("CAST: finished on \(dev.name)")
+                    await finished()
+                    return
+                }
+                if wantsPlay { IceLog.info("CAST: stopped on \(dev.name) at \(ts(currentTime))") }
+                wantsPlay = false
+                isPlaying = false
+            }
+        default:
+            break
+        }
+
+        // Never got going: try the converted stream (CarTV may not play this file as it is), then give up.
+        if !castSawPlaying && Date().timeIntervalSince(castStartedAt) > 25 {
+            if !castCompatible {
+                IceLog.info("CAST: \(dev.name) didn't start the original file (state \(st)); trying the converted stream")
+                showToast("Trying a format \(dev.name) can play…")
+                startCast(at: currentTime, compatible: true)
+            } else {
+                castFailed("\(dev.name) couldn't play this video.")
+            }
+        }
+    }
+
+    private func castSeek(to t: Double) {
+        guard let dev = castDevice else { return }
+        currentTime = t
+        lastTimeValue = t
+        lastProgress = Date()
+        if !castSawPlaying {
+            castPendingSeek = castCompatible ? nil : t
+            if castCompatible { startCast(at: t, compatible: true) }
+            return
+        }
+        if castCompatible {
+            // The converted stream only covers from where it started: start it again at the new spot.
+            startCast(at: t, compatible: true)
+        } else {
+            Task { do { try await DLNA.seek(dev, to: t) } catch { IceLog.info("CAST: seek refused: \(error.localizedDescription)") } }
+        }
+        reportNow()
+    }
+
+    private func castFailed(_ message: String) {
+        IceLog.info("CAST failed: \(message)")
+        castPoll?.invalidate()
+        castPoll = nil
+        isBuffering = false
+        isPlaying = false
+        wantsPlay = false
+        errorMessage = message
+    }
+
+    /// Stop talking to the screen for this video (and stop the screen too when the player is closed).
+    private func endCast(stopScreen: Bool) {
+        castPoll?.invalidate()
+        castPoll = nil
+        castGeneration += 1
+        castPendingSeek = nil
+        if stopScreen, let dev = castDevice { Task { try? await DLNA.stop(dev) } }
+        if !castSession.isEmpty {
+            let s = castSession
+            castSession = ""
+            let c = client
+            Task { await c.stopCast(session: s) }
+        }
     }
 
     static func currentOutputName() -> String {
