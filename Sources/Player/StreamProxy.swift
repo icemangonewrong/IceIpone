@@ -71,6 +71,8 @@ final class StreamProxy: NSObject, URLSessionDataDelegate {
     private var retryPending = false
     private var stopped = false
     private var offlineSince: Date?
+    private var lastDataAt = Date()
+    private var stallTimer: DispatchSourceTimer?
     /// Restarts the download the moment the phone gets a connection back (instead of waiting for a retry).
     private var pathMonitor: NWPathMonitor?
 
@@ -167,9 +169,21 @@ final class StreamProxy: NSObject, URLSessionDataDelegate {
         let url = try await listen()
         let mon = NWPathMonitor()
         mon.pathUpdateHandler = { [weak self] path in
-            guard let self, path.status == .satisfied else { return }
             // Runs on q.
-            guard !self.stopped, self.offline || self.retryPending else { return }
+            guard let self, !self.stopped else { return }
+            if path.status != .satisfied {
+                // Lost it: drop the download now (it would otherwise hang until it times out) so it
+                // restarts the moment the connection is back.
+                if !self.offline {
+                    self.offlineSince = Date()
+                    IceLog.info("proxy: phone has no connection")
+                }
+                self.offline = true
+                if self.task != nil && !self.paused { self.task?.cancel(); self.task = nil }
+                return
+            }
+            let quiet = self.task != nil && !self.paused && Date().timeIntervalSince(self.lastDataAt) > 1.5
+            guard self.offline || self.retryPending || quiet else { return }
             IceLog.info("proxy: connection is back; loading again")
             self.task?.cancel()
             self.task = nil
@@ -178,6 +192,20 @@ final class StreamProxy: NSObject, URLSessionDataDelegate {
         }
         mon.start(queue: q)
         pathMonitor = mon
+        let t = DispatchSource.makeTimerSource(queue: q)
+        t.schedule(deadline: .now() + 2, repeating: 2)
+        t.setEventHandler { [weak self] in
+            guard let self, !self.stopped, let task = self.task, !self.paused, !self.preloading else { return }
+            guard Date().timeIntervalSince(self.lastDataAt) > 6 else { return }
+            IceLog.info("proxy: download got nothing for 6 s; starting it again")
+            task.cancel()
+            self.task = nil
+            if !self.offline { self.offlineSince = Date() }
+            self.offline = true
+            self.scheduleRetry()
+        }
+        t.resume()
+        stallTimer = t
         // Start filling the cache right away (a preload waits until it's allowed).
         q.async { if !self.hold { self.runDownload(from: 0) } }
         return url
@@ -246,6 +274,8 @@ final class StreamProxy: NSObject, URLSessionDataDelegate {
             task = nil
             pathMonitor?.cancel()
             pathMonitor = nil
+            stallTimer?.cancel()
+            stallTimer = nil
             session?.invalidateAndCancel()
             session = nil
             listener?.cancel()
@@ -453,6 +483,7 @@ final class StreamProxy: NSObject, URLSessionDataDelegate {
         downloadPos = start
         let t = session.dataTask(with: req)
         task = t
+        lastDataAt = Date()
         t.resume()
     }
 
@@ -540,6 +571,7 @@ final class StreamProxy: NSObject, URLSessionDataDelegate {
         guard dataTask === task, !stopped else { return }
         store(data, at: downloadPos)
         downloadPos += Int64(data.count)
+        lastDataAt = Date()
         if offline, let since = offlineSince {
             IceLog.info("proxy: loading again after \(Int(Date().timeIntervalSince(since))) s without a connection")
             offlineSince = nil
