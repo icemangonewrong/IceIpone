@@ -108,6 +108,9 @@ final class PlaybackManager: NSObject, ObservableObject {
     private var castSession = ""
     private var castPendingSeek: Double?
     private var castSeekTries = 0          // resume-spot seeks sent for this video
+    private var castFromCache = false      // the screen is reading Ice's cache (not Plex directly)
+    private var castRestarts = 0           // times the video was handed to the screen again after it stopped
+    private let keepAlive = KeepAlive()
     private var castFailures = 0
     private var proxy: StreamProxy?
     /// The next episode's first ~20 seconds, fetched near the end of this one so it starts at once.
@@ -226,11 +229,9 @@ final class PlaybackManager: NSObject, ObservableObject {
             preload = nil
             DispatchQueue.global(qos: .utility).async { pre.proxy.stop() }
         }
-        if castDevice != nil, let p = proxy {
-            proxy = nil   // the screen fetches the video itself
-            DispatchQueue.global(qos: .utility).async { p.stop() }
-        }
-        if proxy == nil, castDevice == nil, Self.airPlayRouteName() == nil, let size = target.firstPart?.size, size > 0, duration > 0 {
+        // Casting: the screen (on this same phone) reads the video from Ice's cache, so the load-ahead
+        // and saved videos cover dead zones there too.
+        if proxy == nil, Self.airPlayRouteName() == nil, let size = target.firstPart?.size, size > 0, duration > 0 {
             let p = StreamProxy(remote: remote, size: size, duration: duration,
                                 aheadSeconds: Double(state.bufferMinutes * 60),
                                 container: target.container, key: target.ratingKey.value)
@@ -246,6 +247,7 @@ final class PlaybackManager: NSObject, ObservableObject {
         wantsPlay = !heldForMotion
         if castDevice != nil {
             wantsPlay = true
+            castRestarts = 0
             startCast(at: resume)
         } else if Self.airPlayRouteName() != nil { startAV(at: resume) } else { startVLC(at: resume) }
         startTimers()
@@ -602,6 +604,12 @@ final class PlaybackManager: NSObject, ObservableObject {
     private func watchdogTick() {
         guard isActive else { return }
         if castDevice != nil {
+            if castFromCache, let snap = proxy?.snapshot() {
+                bufferedAhead = Double(snap.bufferedBytes) / snap.bytesPerSecond
+                offline = snap.offline
+            } else {
+                bufferedAhead = 0
+            }
             updateMarkers()
             return
         }
@@ -1095,12 +1103,9 @@ final class PlaybackManager: NSObject, ObservableObject {
         vlc?.stop()
         vlc = nil
         stopAV()
-        if let p = proxy {
-            proxy = nil
-            DispatchQueue.global(qos: .utility).async { p.stop() }
-        }
         castingTo = dev.name
         wantsPlay = true
+        castRestarts = 0
         // Let go of the sound so the screen's app can play it.
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
         startCast(at: at)
@@ -1152,12 +1157,20 @@ final class PlaybackManager: NSObject, ObservableObject {
                 mime = "application/vnd.apple.mpegurl"
             } else {
                 castBase = 0
-                url = c.directURL(for: item)
                 mime = DLNA.mime(forContainer: item.container)
+                if let p = proxy, let local = await p.ensureListening() {
+                    url = local
+                    castFromCache = true
+                } else {
+                    url = c.directURL(for: item)
+                    castFromCache = false
+                }
             }
+            if compatible { castFromCache = false }
             guard gen == castGeneration, castDevice == dev else { return }
             guard let url else { castFailed("Couldn't find the file for this video."); return }
-            IceLog.info("CAST to \(dev.name): \(compatible ? "converted stream (sound to AAC)" : "original file (\(item.container ?? "?"))") from \(ts(seconds))")
+            IceLog.info("CAST to \(dev.name): \(compatible ? "converted stream (sound to AAC)" : "original file (\(item.container ?? "?"))\(castFromCache ? " via Ice's cache" : " straight from Plex")") from \(ts(seconds))")
+            keepAlive.start()
             do {
                 try? await DLNA.stop(dev)       // some screens won't take a new video while one is loaded
                 try await DLNA.load(dev, url: url, title: title, mime: mime, duration: dur)
@@ -1218,6 +1231,7 @@ final class PlaybackManager: NSObject, ObservableObject {
         case "PLAYING":
             if !castSawPlaying {
                 castSawPlaying = true
+                if castRestarts > 0 && castRestarts < 3 { castRestarts = 0 }
                 hasPlayedSinceStart = true
                 IceLog.info("CAST: \(dev.name) is playing")
             }
@@ -1246,6 +1260,18 @@ final class PlaybackManager: NSObject, ObservableObject {
                 if duration > 0 && currentTime >= duration - 30 {
                     IceLog.info("CAST: finished on \(dev.name)")
                     await finished()
+                    return
+                }
+                if wantsPlay && castRestarts < 3 {
+                    // Stopped on its own mid-movie (e.g. it lost the cache while iOS had Ice asleep):
+                    // give it the video again at the same spot. After two tries, go straight to Plex.
+                    castRestarts += 1
+                    if castRestarts >= 3, let p = proxy {
+                        proxy = nil
+                        DispatchQueue.global(qos: .utility).async { p.stop() }
+                    }
+                    IceLog.info("CAST: \(dev.name) stopped at \(ts(currentTime)); handing it the video again (try \(castRestarts))")
+                    startCast(at: currentTime, compatible: castCompatible)
                     return
                 }
                 if wantsPlay { IceLog.info("CAST: stopped on \(dev.name) at \(ts(currentTime))") }
@@ -1321,6 +1347,7 @@ final class PlaybackManager: NSObject, ObservableObject {
 
     /// Stop talking to the screen for this video (and stop the screen too when the player is closed).
     private func endCast(stopScreen: Bool) {
+        keepAlive.stop()
         castPoll?.invalidate()
         castPoll = nil
         castGeneration += 1
@@ -1510,4 +1537,53 @@ extension PlaybackManager: CLLocationManagerDelegate {
 final class AVPlayerHostView: UIView {
     override class var layerClass: AnyClass { AVPlayerLayer.self }
     var playerLayer: AVPlayerLayer { layer as! AVPlayerLayer }
+}
+
+
+/// Keeps Ice running in the background while it feeds a cast screen from its cache (the screen's app is
+/// in front, so iOS would otherwise put Ice to sleep and the video would stop). Uses coarse location
+/// updates, which iOS lets run in the background; nothing is done with the location.
+final class KeepAlive: NSObject, CLLocationManagerDelegate {
+    private let manager = CLLocationManager()
+    private var running = false
+    private var wanted = false
+
+    override init() {
+        super.init()
+        manager.delegate = self
+        manager.desiredAccuracy = kCLLocationAccuracyThreeKilometers
+        manager.distanceFilter = CLLocationDistanceMax
+        manager.pausesLocationUpdatesAutomatically = false
+    }
+
+    func start() {
+        wanted = true
+        guard !running else { return }
+        if manager.authorizationStatus == .notDetermined { manager.requestWhenInUseAuthorization() }
+        guard manager.authorizationStatus == .authorizedWhenInUse || manager.authorizationStatus == .authorizedAlways else {
+            IceLog.info("Keep-awake: no location permission, so iOS may put Ice to sleep while casting")
+            return
+        }
+        running = true
+        manager.allowsBackgroundLocationUpdates = true
+        manager.showsBackgroundLocationIndicator = true
+        manager.startUpdatingLocation()
+        IceLog.info("Keep-awake: on (location) while casting")
+    }
+
+    func stop() {
+        wanted = false
+        guard running else { return }
+        running = false
+        manager.stopUpdatingLocation()
+        manager.allowsBackgroundLocationUpdates = false
+        IceLog.info("Keep-awake: off")
+    }
+
+    func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
+        // Just allowed: turn on now if a cast is running.
+        if wanted && !running { DispatchQueue.main.async { if self.wanted { self.start() } } }
+    }
+    func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {}
+    func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {}
 }

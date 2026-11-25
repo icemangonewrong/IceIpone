@@ -27,6 +27,7 @@ targets:
         UIUserInterfaceStyle: Dark
         UIBackgroundModes:
           - audio
+          - location
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
           - UIInterfaceOrientationLandscapeLeft
@@ -35,7 +36,7 @@ targets:
           NSAllowsArbitraryLoads: true
           NSAllowsLocalNetworking: true
         NSLocalNetworkUsageDescription: Ice connects to your Plex server on the local network.
-        NSLocationWhenInUseUsageDescription: Ice pauses video on the car screen while the vehicle is moving.
+        NSLocationWhenInUseUsageDescription: Ice pauses video on the car screen while the vehicle is moving, and stays awake while it feeds video to a cast screen.
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: true
           UISceneConfigurations:

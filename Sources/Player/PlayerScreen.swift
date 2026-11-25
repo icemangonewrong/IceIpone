@@ -271,7 +271,7 @@ private struct PlayerView: View {
             }
             let shown = scrubbing ? scrubValue : playback.currentTime
             Text("\(timeString(shown)) / \(timeString(playback.duration))"
-                 + (playback.bufferedAhead > 1 && playback.castDevice == nil ? "  ·  \(timeString(playback.bufferedAhead)) loaded" : ""))
+                 + (playback.bufferedAhead > 1 ? "  ·  \(timeString(playback.bufferedAhead)) loaded" : ""))
                 .font(.caption.monospacedDigit().weight(.semibold))
                 .foregroundColor(.white.opacity(0.65))
                 .lineLimit(1)
