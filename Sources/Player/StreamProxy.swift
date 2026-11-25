@@ -555,7 +555,16 @@ final class StreamProxy: NSObject, URLSessionDataDelegate {
 
     private func handleRequest(_ conn: NWConnection, header: String) {
         let lines = header.components(separatedBy: "\r\n")
-        let method = lines.first?.split(separator: " ").first.map(String.init) ?? "GET"
+        let first = lines.first?.split(separator: " ") ?? []
+        let method = first.first.map(String.init) ?? "GET"
+        // Only the video's own address gets the video. Anything else (e.g. Cast looking for a
+        // description page on this phone's ports) gets a quick "not here" instead of the whole file.
+        let path = first.count > 1 ? String(first[1].split(separator: "?").first ?? "") : ""
+        guard path == "/media" else {
+            let resp = "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            conn.send(content: Data(resp.utf8), completion: .contentProcessed { _ in conn.cancel() })
+            return
+        }
 
         var start: Int64 = 0
         var end: Int64 = size - 1

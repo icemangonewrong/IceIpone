@@ -221,8 +221,10 @@ enum DLNA {
     private static func describe(_ location: URL) async throws -> DLNADevice? {
         var req = URLRequest(url: location)
         req.timeoutInterval = 2
-        let (data, resp) = try await URLSession.shared.dataCompat(for: req)
-        guard (resp as? HTTPURLResponse)?.statusCode == 200 else { return nil }
+        // A description page is a few KB. Stop reading anything that isn't (a port serving a video
+        // would otherwise be read into memory until iOS kills the app).
+        guard let got = await SmallFetch.get(req, limit: 256 * 1024), got.1 == 200 else { return nil }
+        let data = got.0
         let leaves = XMLLeaves.parse(data)
         var name = "", udn = "", base: URL?
         var lastType = ""
@@ -373,5 +375,57 @@ private final class XMLLeaves: NSObject, XMLParserDelegate {
         }
         text = ""
         hadChild = true
+    }
+}
+
+/// GET that gives up once the answer is bigger than `limit` bytes (or isn't text/XML), so a stray port
+/// that serves a video can't fill the phone's memory.
+private final class SmallFetch: NSObject, URLSessionDataDelegate {
+    private let limit: Int
+    private var data = Data()
+    private var code = 0
+    private var cont: CheckedContinuation<(Data, Int)?, Never>?
+
+    private init(limit: Int) { self.limit = limit }
+
+    static func get(_ req: URLRequest, limit: Int) async -> (Data, Int)? {
+        let me = SmallFetch(limit: limit)
+        let cfg = URLSessionConfiguration.ephemeral
+        cfg.timeoutIntervalForRequest = req.timeoutInterval
+        cfg.timeoutIntervalForResource = 4
+        let session = URLSession(configuration: cfg, delegate: me, delegateQueue: nil)
+        defer { session.finishTasksAndInvalidate() }
+        return await withCheckedContinuation { c in
+            me.cont = c
+            session.dataTask(with: req).resume()
+        }
+    }
+
+    private func finish(_ r: (Data, Int)?) {
+        guard let c = cont else { return }
+        cont = nil
+        c.resume(returning: r)
+    }
+
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive response: URLResponse,
+                    completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
+        let http = response as? HTTPURLResponse
+        code = http?.statusCode ?? 0
+        let type = (http?.value(forHTTPHeaderField: "Content-Type") ?? "").lowercased()
+        if response.expectedContentLength > Int64(limit) || type.hasPrefix("video/") || type.hasPrefix("audio/") {
+            completionHandler(.cancel)
+            finish(nil)
+            return
+        }
+        completionHandler(.allow)
+    }
+
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive d: Data) {
+        data.append(d)
+        if data.count > limit { dataTask.cancel(); finish(nil) }
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        finish(error == nil ? (data, code) : nil)
     }
 }
