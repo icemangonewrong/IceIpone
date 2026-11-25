@@ -70,6 +70,9 @@ final class StreamProxy: NSObject, URLSessionDataDelegate {
     private var offline = false
     private var retryPending = false
     private var stopped = false
+    private var offlineSince: Date?
+    /// Restarts the download the moment the phone gets a connection back (instead of waiting for a retry).
+    private var pathMonitor: NWPathMonitor?
 
     // MARK: - Setup
 
@@ -162,6 +165,19 @@ final class StreamProxy: NSObject, URLSessionDataDelegate {
         session = URLSession(configuration: cfg, delegate: self, delegateQueue: opQueue)
 
         let url = try await listen()
+        let mon = NWPathMonitor()
+        mon.pathUpdateHandler = { [weak self] path in
+            guard let self, path.status == .satisfied else { return }
+            // Runs on q.
+            guard !self.stopped, self.offline || self.retryPending else { return }
+            IceLog.info("proxy: connection is back; loading again")
+            self.task?.cancel()
+            self.task = nil
+            self.retryPending = false
+            self.resumeDownload()
+        }
+        mon.start(queue: q)
+        pathMonitor = mon
         // Start filling the cache right away (a preload waits until it's allowed).
         q.async { if !self.hold { self.runDownload(from: 0) } }
         return url
@@ -228,6 +244,8 @@ final class StreamProxy: NSObject, URLSessionDataDelegate {
             stopped = true
             task?.cancel()
             task = nil
+            pathMonitor?.cancel()
+            pathMonitor = nil
             session?.invalidateAndCancel()
             session = nil
             listener?.cancel()
@@ -288,6 +306,15 @@ final class StreamProxy: NSObject, URLSessionDataDelegate {
             planEnd = a + n
             runDownload(from: a)
             return
+        }
+    }
+
+    /// Seconds of video on the phone starting at `seconds` into it (by the average bitrate).
+    func secondsLoaded(at seconds: Double, duration: Double) -> Double {
+        q.sync {
+            guard duration > 0 else { return 0 }
+            let pos = Int64(Double(size) * min(max(seconds / duration, 0), 1))
+            return Double(available(from: pos)) / bytesPerSecond
         }
     }
 
@@ -445,8 +472,21 @@ final class StreamProxy: NSObject, URLSessionDataDelegate {
         q.asyncAfter(deadline: .now() + 3) { [weak self] in
             guard let self, !self.stopped else { return }
             self.retryPending = false
-            if self.preloading { if !self.hold { self.nextPlanStep() } } else { self.runDownload(from: self.readPos) }
+            self.resumeDownload()
         }
+    }
+
+    /// Start downloading again — from where a reader is waiting, if one is (a cast screen can have several
+    /// connections open, and the last one opened isn't always the one playing).
+    private func resumeDownload() {
+        guard !stopped else { return }
+        if preloading { if !hold { nextPlanStep() }; return }
+        if let waiting = jobs.values.filter({ !$0.sending && $0.pos < $0.end && available(from: $0.pos) <= 0 })
+            .min(by: { $0.pos < $1.pos }) {
+            activeJob = ObjectIdentifier(waiting.conn)
+            readPos = waiting.pos
+        }
+        runDownload(from: readPos)
     }
 
     private func throttle() {
@@ -500,6 +540,10 @@ final class StreamProxy: NSObject, URLSessionDataDelegate {
         guard dataTask === task, !stopped else { return }
         store(data, at: downloadPos)
         downloadPos += Int64(data.count)
+        if offline, let since = offlineSince {
+            IceLog.info("proxy: loading again after \(Int(Date().timeIntervalSince(since))) s without a connection")
+            offlineSince = nil
+        }
         offline = false
         pumpAll()
         throttle()
@@ -515,6 +559,10 @@ final class StreamProxy: NSObject, URLSessionDataDelegate {
             return
         }
         if error != nil {
+            if !offline {
+                offlineSince = Date()
+                IceLog.info("proxy: lost the connection while loading (\((error as NSError?)?.localizedDescription ?? "")); retrying every 3 s")
+            }
             offline = true
             scheduleRetry()
         } else if downloadPos < size {
@@ -649,6 +697,11 @@ final class StreamProxy: NSObject, URLSessionDataDelegate {
         if avail <= 0 {
             // Not downloaded yet: the player waits here (it shows as buffering) instead of failing.
             if id == activeJob { ensureDownloading(toward: job.pos) }
+            else if task == nil && !retryPending {
+                activeJob = id
+                readPos = job.pos
+                ensureDownloading(toward: job.pos)
+            }
             return
         }
 

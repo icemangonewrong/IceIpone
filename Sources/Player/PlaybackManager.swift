@@ -110,6 +110,10 @@ final class PlaybackManager: NSObject, ObservableObject {
     private var castSeekTries = 0          // resume-spot seeks sent for this video
     private var castFromCache = false      // the screen is reading Ice's cache (not Plex directly)
     private var castRestarts = 0           // times the video was handed to the screen again after it stopped
+    private var castLastAt: Double = -1     // the screen's last reported spot
+    private var castLastMove = Date()       // when that spot last changed
+    private var castStarved = false         // the screen ran out of loaded video (dead zone)
+    private var castRecoveries = 0          // handed over again after running dry, for this video
     private let keepAlive = KeepAlive()
     private var castFailures = 0
     private var proxy: StreamProxy?
@@ -248,6 +252,7 @@ final class PlaybackManager: NSObject, ObservableObject {
         if castDevice != nil {
             wantsPlay = true
             castRestarts = 0
+            castRecoveries = 0
             startCast(at: resume)
         } else if Self.airPlayRouteName() != nil { startAV(at: resume) } else { startVLC(at: resume) }
         startTimers()
@@ -1106,6 +1111,7 @@ final class PlaybackManager: NSObject, ObservableObject {
         castingTo = dev.name
         wantsPlay = true
         castRestarts = 0
+        castRecoveries = 0
         // Let go of the sound so the screen's app can play it.
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
         startCast(at: at)
@@ -1139,6 +1145,9 @@ final class PlaybackManager: NSObject, ObservableObject {
         castPendingSeek = nil
         castSeekTries = 0
         castResumeTarget = nil
+        castLastAt = -1
+        castLastMove = Date()
+        castStarved = false
         isBuffering = true
         hasPlayedSinceStart = false
         let title = item.type == "episode"
@@ -1226,6 +1235,7 @@ final class PlaybackManager: NSObject, ObservableObject {
             currentTime = t
         }
         if duration <= 0, let len = pos?.length, len > 0, !castCompatible { duration = len }
+        if castFromCache, castSawPlaying, await castRecoverIfDry(dev, at: pos?.at, state: st) { return }
 
         switch st {
         case "PLAYING":
@@ -1293,6 +1303,31 @@ final class PlaybackManager: NSObject, ObservableObject {
                 castFailed("\(dev.name) couldn't play this video.")
             }
         }
+    }
+
+    /// Casting from Ice's cache through a dead zone: when the screen runs out it may give up on the
+    /// connection (and sit paused or "loading" forever). Once there's video loaded again, hand it over again
+    /// at the same spot. Returns true when it did.
+    private func castRecoverIfDry(_ dev: DLNADevice, at: Double?, state st: String) async -> Bool {
+        if let at, abs(at - castLastAt) > 0.5 { castLastAt = at; castLastMove = Date() }
+        let stuckFor = Date().timeIntervalSince(castLastMove)
+        let loaded = proxy?.secondsLoaded(at: currentTime, duration: duration) ?? 0
+        if loaded < 3 && stuckFor > 2 && (wantsPlay || castStarved) {
+            if !castStarved { IceLog.info("CAST: \(dev.name) ran out of loaded video at \(ts(currentTime)) (state \(st))") }
+            castStarved = true
+            isBuffering = true
+            waitingForSignal = offline
+            return false
+        }
+        // Wanted playing (or ran dry) but hasn't moved, and there's video again: give it the video again.
+        guard (castStarved || wantsPlay), stuckFor > 8, loaded >= 15, castRecoveries < 6,
+              st != "PLAYING" || stuckFor > 12 else { return false }
+        castRecoveries += 1
+        castStarved = false
+        IceLog.info("CAST: \(dev.name) stuck at \(ts(currentTime)) (state \(st)) with \(Int(loaded)) s loaded; handing it the video again (\(castRecoveries))")
+        wantsPlay = true
+        startCast(at: currentTime)
+        return true
     }
 
     /// Where the screen should be after resuming (cleared once it gets there or the video changes).
