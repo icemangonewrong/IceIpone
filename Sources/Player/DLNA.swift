@@ -7,6 +7,7 @@ struct DLNADevice: Identifiable, Hashable {
     let name: String
     let control: URL          // AVTransport control address
     let service: String       // e.g. urn:schemas-upnp-org:service:AVTransport:1
+    var location: URL? = nil  // its description page (on this phone: always 127.0.0.1)
 }
 
 enum DLNAError: LocalizedError {
@@ -26,16 +27,41 @@ enum DLNA {
 
     // MARK: Find screens
 
-    static func discover(timeout: TimeInterval = 3) async -> [DLNADevice] {
-        let locations = await Task.detached(priority: .userInitiated) { DLNA.ssdpSearch(timeout: timeout) }.value
-        IceLog.info("CAST search: \(locations.count) answer(s) \(locations.map(\.absoluteString).joined(separator: " "))")
+    private static let lastKey = "castLastLocation"
+    /// Where CarTV's player (LyntraPlayer) keeps its description page.
+    private static let descriptionPaths = ["/dlna/description.xml?c=1", "/dlna/description.xml", "/description.xml"]
+
+    static func discover(timeout: TimeInterval = 2.5) async -> [DLNADevice] {
         var found: [DLNADevice] = []
-        await withTaskGroup(of: DLNADevice?.self) { group in
-            for loc in locations { group.addTask { try? await DLNA.describe(loc) } }
-            for await d in group {
-                if let d, !found.contains(where: { $0.id == d.id }) { found.append(d) }
+        func add(_ locations: [URL]) async {
+            await withTaskGroup(of: DLNADevice?.self) { group in
+                for loc in locations { group.addTask { try? await DLNA.describe(loc) } }
+                for await d in group {
+                    if let d, !found.contains(where: { $0.id == d.id }) { found.append(d) }
+                }
             }
         }
+
+        // 1. Where it was last time (CarTV keeps its port while it stays open).
+        if let s = UserDefaults.standard.string(forKey: lastKey), let u = URL(string: s) {
+            await add([u])
+            if !found.isEmpty { IceLog.info("CAST: found at the last address") }
+        }
+        // 2. The usual search.
+        if found.isEmpty {
+            IceLog.info("CAST search: this phone's addresses \(localIPv4().joined(separator: ", "))")
+            let locations = await Task.detached(priority: .userInitiated) { DLNA.ssdpSearch(timeout: timeout) }.value
+            IceLog.info("CAST search: \(locations.count) answer(s) \(locations.map(\.absoluteString).joined(separator: " "))")
+            await add(locations)
+        }
+        // 3. CarTV doesn't answer the search from inside the phone: look for its web server on the phone's own ports.
+        if found.isEmpty {
+            let started = Date()
+            let ports = await Task.detached(priority: .userInitiated) { DLNA.openPorts(host: "127.0.0.1", 49152...65535) }.value
+            IceLog.info("CAST scan: open ports on this phone \(ports) (\(String(format: "%.1f", Date().timeIntervalSince(started))) s)")
+            await add(ports.flatMap { p in descriptionPaths.compactMap { URL(string: "http://127.0.0.1:\(p)\($0)") } })
+        }
+        if let d = found.first, let loc = d.location { UserDefaults.standard.set(loc.absoluteString, forKey: lastKey) }
         // The phone's own address first (same device), then the rest by name.
         return found.sorted {
             let a = $0.control.host == "127.0.0.1", b = $1.control.host == "127.0.0.1"
@@ -114,6 +140,62 @@ enum DLNA {
         return found
     }
 
+    /// TCP ports accepting connections on `host` (non-blocking connects in small batches; on the phone itself a
+    /// closed port answers at once, so the whole range takes a second or two).
+    private static func openPorts(host: String, _ range: ClosedRange<Int>) -> [Int] {
+        var open: [Int] = []
+        let all = Array(range)
+        var i = 0
+        while i < all.count {
+            let batch = all[i..<min(i + 100, all.count)]
+            i += 100
+            var socks: [(Int32, Int)] = []
+            for port in batch {
+                let fd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)
+                guard fd >= 0 else { continue }
+                var on: Int32 = 1
+                setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size))
+                _ = fcntl(fd, F_SETFL, fcntl(fd, F_GETFL, 0) | O_NONBLOCK)
+                var addr = sockaddr_in()
+                addr.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+                addr.sin_family = sa_family_t(AF_INET)
+                addr.sin_port = UInt16(port).bigEndian
+                inet_pton(AF_INET, host, &addr.sin_addr)
+                let r = withUnsafePointer(to: addr) {
+                    $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
+                }
+                if r == 0 { open.append(port); close(fd) }
+                else if errno == EINPROGRESS { socks.append((fd, port)) }
+                else { close(fd) }
+            }
+            // Wait (briefly) for the ones still connecting.
+            var fds = socks.map { pollfd(fd: $0.0, events: Int16(POLLOUT), revents: 0) }
+            let deadline = Date().addingTimeInterval(0.3)
+            var pending = fds.count
+            while pending > 0 && Date() < deadline {
+                let n = fds.withUnsafeMutableBufferPointer { poll($0.baseAddress, nfds_t($0.count), 50) }
+                if n <= 0 { continue }
+                pending = 0
+                for k in fds.indices {
+                    if fds[k].revents != 0 {
+                        if fds[k].fd >= 0 {
+                            var err: Int32 = 0
+                            var len = socklen_t(MemoryLayout<Int32>.size)
+                            getsockopt(fds[k].fd, SOL_SOCKET, SO_ERROR, &err, &len)
+                            if err == 0 && (fds[k].revents & Int16(POLLOUT)) != 0 { open.append(socks[k].1) }
+                            fds[k].fd = -1          // done: poll ignores negative fds
+                        }
+                    } else if fds[k].fd >= 0 {
+                        pending += 1
+                    }
+                    fds[k].revents = 0
+                }
+            }
+            for (fd, _) in socks { close(fd) }
+        }
+        return open.sorted()
+    }
+
     /// The phone's own IPv4 addresses (Wi-Fi, hotspot, VPN…), loopback excluded.
     private static func localIPv4() -> [String] {
         var out: [String] = []
@@ -138,8 +220,9 @@ enum DLNA {
     /// Reads a device's description and returns it if it can play videos (has AVTransport).
     private static func describe(_ location: URL) async throws -> DLNADevice? {
         var req = URLRequest(url: location)
-        req.timeoutInterval = 3
-        let (data, _) = try await URLSession.shared.dataCompat(for: req)
+        req.timeoutInterval = 2
+        let (data, resp) = try await URLSession.shared.dataCompat(for: req)
+        guard (resp as? HTTPURLResponse)?.statusCode == 200 else { return nil }
         let leaves = XMLLeaves.parse(data)
         var name = "", udn = "", base: URL?
         var lastType = ""
@@ -164,8 +247,13 @@ enum DLNA {
             ctl = c.url ?? control
         }
         IceLog.info("CAST found \"\(name)\" at \(ctl.absoluteString)")
+        var loc = location
+        if ctl.host == "127.0.0.1", var c = URLComponents(url: location, resolvingAgainstBaseURL: false) {
+            c.host = "127.0.0.1"
+            loc = c.url ?? location
+        }
         return DLNADevice(id: udn.isEmpty ? ctl.absoluteString : udn, name: name.isEmpty ? "Screen" : name,
-                          control: ctl, service: service)
+                          control: ctl, service: service, location: loc)
     }
 
     // MARK: Control
