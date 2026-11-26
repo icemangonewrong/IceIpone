@@ -171,20 +171,36 @@ final class PlexClient {
         return dirs.filter { $0.isVideo }
     }
 
-    /// Continue Watching. Newer servers have a dedicated hub; older ones use On Deck.
+    /// Continue Watching = On Deck (in-progress videos and the next episode of shows you're watching,
+    /// newest first) plus anything extra the server's Continue Watching hub has. The hub on its own leaves
+    /// out a next episode that hasn't been started (e.g. S3E2 after finishing S3E1).
     func continueWatching() async throws -> [PlexItem] {
+        var hub: [PlexItem] = []
         if let data = try? await serverGET("/hubs/home/continueWatching"),
            let hubs = try? decodeHubs(data) {
-            let items = hubs.flatMap { $0.Metadata ?? [] }
-            if !items.isEmpty { return items }
+            hub = hubs.flatMap { $0.Metadata ?? [] }
         }
-        if let data = try? await serverGET("/hubs", query: [URLQueryItem(name: "count", value: "30")]),
+        if hub.isEmpty,
+           let data = try? await serverGET("/hubs", query: [URLQueryItem(name: "count", value: "30")]),
            let hubs = try? decodeHubs(data) {
             let match = hubs.first { ($0.hubIdentifier ?? "").contains("continue") }
                 ?? hubs.first { ($0.hubIdentifier ?? "").contains("ondeck") }
-            if let items = match?.Metadata, !items.isEmpty { return items }
+            hub = match?.Metadata ?? []
         }
-        return try decodeItems(try await serverGET("/library/onDeck"))
+        let deck = (try? decodeItems(try await serverGET("/library/onDeck"))) ?? []
+        if deck.isEmpty && hub.isEmpty { return try decodeItems(try await serverGET("/library/onDeck")) }
+
+        var out: [PlexItem] = []
+        var seen = Set<String>()
+        var shows = Set<String>()
+        for item in deck + hub {
+            guard seen.insert(item.ratingKey.value).inserted else { continue }
+            if item.type == "episode", let show = item.grandparentRatingKey?.value {
+                guard shows.insert(show).inserted else { continue }   // one entry per show
+            }
+            out.append(item)
+        }
+        return out
     }
 
     func recentlyAdded(section: String, count: Int = 30) async throws -> [PlexItem] {
