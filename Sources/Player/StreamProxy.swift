@@ -497,6 +497,7 @@ final class StreamProxy: NSObject, URLSessionDataDelegate {
         let t = session.dataTask(with: req)
         task = t
         lastDataAt = Date()
+        if Date().timeIntervalSince(speedSince) > 90 { speedBytes = 0; speedSince = Date() }
         t.resume()
     }
 
@@ -564,6 +565,8 @@ final class StreamProxy: NSObject, URLSessionDataDelegate {
         }
     }
     private var loggedPause = false
+    private var speedBytes: Int64 = 0
+    private var speedSince = Date()
 
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask,
                     didReceive response: URLResponse,
@@ -585,6 +588,18 @@ final class StreamProxy: NSObject, URLSessionDataDelegate {
         store(data, at: downloadPos)
         downloadPos += Int64(data.count)
         lastDataAt = Date()
+        speedBytes += Int64(data.count)
+        let span = Date().timeIntervalSince(speedSince)
+        if span >= 60 {
+            // Once a minute while loading: is the connection keeping up with the video?
+            let got = Double(speedBytes) * 8 / span / 1_000_000
+            let need = bytesPerSecond * 8 / 1_000_000
+            let ahead = Double(available(from: readPos)) / bytesPerSecond
+            IceLog.info(String(format: "proxy: loading at %.1f Mbps, this video plays at %.1f Mbps, %d s loaded ahead%@",
+                               got, need, Int(ahead), got < need ? " (slower than the video: loaded amount will shrink)" : ""))
+            speedBytes = 0
+            speedSince = Date()
+        }
         if offline, let since = offlineSince {
             IceLog.info("proxy: loading again after \(Int(Date().timeIntervalSince(since))) s without a connection")
             offlineSince = nil
