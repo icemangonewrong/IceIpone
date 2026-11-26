@@ -209,6 +209,23 @@ final class StreamProxy: NSObject, URLSessionDataDelegate {
         t.schedule(deadline: .now() + 2, repeating: 2)
         t.setEventHandler { [weak self] in
             guard let self, !self.stopped, let task = self.task, !self.paused, !self.preloading else { return }
+            // Still getting data, but slowly: a long download over cellular can slow to a trickle
+            // (1 Mbps, then 0.3) while a fresh connection gets full speed. Over 20 s at under half the
+            // video's rate while short of the load-ahead target: reconnect (at most every 30 s).
+            let span = Date().timeIntervalSince(self.winStart)
+            if span >= 20, Date().timeIntervalSince(self.lastSlowRestart) >= 30,
+               self.downloadPos - self.readPos < self.aheadLimit * 9 / 10 {
+                let rate = Double(self.winBytes) / span
+                if rate < self.bytesPerSecond / 2 {
+                    IceLog.info(String(format: "proxy: loading slowly (%.1f Mbps, video needs %.1f); opening a fresh connection",
+                                       rate * 8 / 1_000_000, self.bytesPerSecond * 8 / 1_000_000))
+                    self.lastSlowRestart = Date()
+                    task.cancel()
+                    self.task = nil
+                    self.runDownload(from: self.readPos)
+                    return
+                }
+            }
             guard Date().timeIntervalSince(self.lastDataAt) > 10 else { return }
             IceLog.info("proxy: download got nothing for 10 s; starting it again")
             task.cancel()
@@ -497,6 +514,8 @@ final class StreamProxy: NSObject, URLSessionDataDelegate {
         let t = session.dataTask(with: req)
         task = t
         lastDataAt = Date()
+        winBytes = 0
+        winStart = Date()
         if Date().timeIntervalSince(speedSince) > 90 { speedBytes = 0; speedSince = Date() }
         t.resume()
     }
@@ -566,6 +585,9 @@ final class StreamProxy: NSObject, URLSessionDataDelegate {
     }
     private var loggedPause = false
     private var speedBytes: Int64 = 0
+    private var winBytes: Int64 = 0      // bytes on the current connection, for the slow-connection check
+    private var winStart = Date()
+    private var lastSlowRestart = Date.distantPast
     private var speedSince = Date()
 
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask,
@@ -589,6 +611,7 @@ final class StreamProxy: NSObject, URLSessionDataDelegate {
         downloadPos += Int64(data.count)
         lastDataAt = Date()
         speedBytes += Int64(data.count)
+        winBytes += Int64(data.count)
         let span = Date().timeIntervalSince(speedSince)
         if span >= 60 {
             // Once a minute while loading: is the connection keeping up with the video?
