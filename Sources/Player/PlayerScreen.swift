@@ -660,6 +660,21 @@ private struct TracksMenu: View {
                     }
                 }
             }
+            if playback.castDevice != nil {
+                Section(header: Text("Subtitles on the car screen")) {
+                    Button {
+                        playback.setCastSubtitles(false)
+                    } label: {
+                        if !playback.castSubtitlesOn { Label("Off", systemImage: "checkmark") } else { Text("Off") }
+                    }
+                    Button {
+                        playback.setCastSubtitles(true)
+                    } label: {
+                        if playback.castSubtitlesOn { Label("On — pick one on the car screen", systemImage: "checkmark") }
+                        else { Text("On — pick one on the car screen") }
+                    }
+                }
+            }
             let subs = playback.subtitleTracks
             if !subs.isEmpty {
                 Section(header: Text("Subtitles")) {
@@ -673,7 +688,7 @@ private struct TracksMenu: View {
                     }
                 }
             }
-            if audio.isEmpty && subs.isEmpty {
+            if audio.isEmpty && subs.isEmpty && playback.castDevice == nil {
                 Text("No other audio or subtitles")
             }
             Divider()

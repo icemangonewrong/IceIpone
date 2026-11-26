@@ -22,7 +22,7 @@ final class StreamProxy: NSObject, URLSessionDataDelegate {
     private let q = DispatchQueue(label: "carplex.proxy")
     private let remote: URL
     private let size: Int64
-    private let mime: String
+    fileprivate let mime: String
     let bytesPerSecond: Double
     private var aheadLimit: Int64
     private let fullAheadLimit: Int64
@@ -369,6 +369,11 @@ final class StreamProxy: NSObject, URLSessionDataDelegate {
         }
     }
 
+    /// Casting: when on, the screen is told the MKV's subtitle tracks aren't subtitles, so it can't turn
+    /// one on by itself. Only the one byte that says "subtitle" in each track's header changes, and only
+    /// in what's sent; the saved file is untouched.
+    func setHideSubtitles(_ on: Bool) { q.async { self.hideSubtitles = on } }
+
     /// Seconds of video on the phone starting at `seconds` into it (by the average bitrate).
     func secondsLoaded(at seconds: Double, duration: Double) -> Double {
         q.sync {
@@ -391,7 +396,7 @@ final class StreamProxy: NSObject, URLSessionDataDelegate {
     private func chunkLength(_ i: Int64) -> Int64 { min(chunkSize, size - i * chunkSize) }
 
     /// Number of cached bytes available in a row starting at `pos`.
-    private func available(from pos: Int64) -> Int64 {
+    fileprivate func available(from pos: Int64) -> Int64 {
         var p = pos
         var total: Int64 = 0
         while p < size {
@@ -414,7 +419,7 @@ final class StreamProxy: NSObject, URLSessionDataDelegate {
         return min(ci * chunkSize + (chunks[ci] ?? 0), size)
     }
 
-    private func readCached(at pos: Int64, max n: Int64) -> Data? {
+    fileprivate func readCached(at pos: Int64, max n: Int64) -> Data? {
         let ci = pos / chunkSize
         let have = chunks[ci] ?? 0
         let within = pos - ci * chunkSize
@@ -588,6 +593,9 @@ final class StreamProxy: NSObject, URLSessionDataDelegate {
     private var winBytes: Int64 = 0      // bytes on the current connection, for the slow-connection check
     private var winStart = Date()
     private var lastSlowRestart = Date.distantPast
+    /// Casting: hide the file's subtitle tracks from the screen (MKV only; see subtitleTypeOffsets).
+    private var hideSubtitles = false
+    var loggedHiddenCount = -1
     private var speedSince = Date()
 
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask,
@@ -789,7 +797,8 @@ final class StreamProxy: NSObject, URLSessionDataDelegate {
         }
 
         let n = min(avail, sendSize, job.end - job.pos)
-        guard let data = readCached(at: job.pos, max: n), !data.isEmpty else { return }
+        guard var data = readCached(at: job.pos, max: n), !data.isEmpty else { return }
+        if hideSubtitles, job.pos < headerScan { patchSubtitles(&data, at: job.pos) }
         job.sending = true
         job.conn.send(content: data, completion: .contentProcessed { [weak self] err in
             guard let self else { return }
@@ -810,5 +819,99 @@ final class StreamProxy: NSObject, URLSessionDataDelegate {
             }
             self.pump(job)
         })
+    }
+}
+
+
+// MARK: - Hiding MKV subtitle tracks (casting)
+
+private let headerScan: Int64 = 4_000_000
+
+extension StreamProxy {
+    /// Changes TrackType "subtitle" (0x11) to "control" (0x20) for bytes being sent at `pos`.
+    func patchSubtitles(_ data: inout Data, at pos: Int64) {
+        guard mime == "video/x-matroska" else { return }
+        let have = min(availableFromStart(), headerScan)
+        guard have > 0, let head = readRange(0, have) else { return }
+        let offs = StreamProxy.subtitleTypeOffsets(head)
+        if offs.count != loggedHiddenCount {
+            loggedHiddenCount = offs.count
+            IceLog.info("Cast: hiding \(offs.count) subtitle track(s) from the screen")
+        }
+        let base = data.startIndex
+        for o in offs where o >= pos && o < pos + Int64(data.count) {
+            let i = base + Int(o - pos)
+            if data[i] == 0x11 { data[i] = 0x20 }
+        }
+    }
+}
+
+extension StreamProxy {
+    fileprivate func availableFromStart() -> Int64 { available(from: 0) }
+
+    /// Bytes [start, start+count) from the cache (they must all be there).
+    fileprivate func readRange(_ start: Int64, _ count: Int64) -> Data? {
+        var out = Data(capacity: Int(count))
+        var pos = start
+        while pos < start + count {
+            guard let d = readCached(at: pos, max: start + count - pos), !d.isEmpty else { return nil }
+            out.append(d)
+            pos += Int64(d.count)
+        }
+        return out
+    }
+
+    /// Offsets of the TrackType byte of every subtitle track in an MKV header (as far as `d` reaches).
+    static func subtitleTypeOffsets(_ d: Data) -> [Int64] {
+        let b = [UInt8](d)
+        let n = b.count
+
+        // EBML variable-length number at i: (value, length). ID keeps its marker bits.
+        func vint(_ i: Int, keepMarker: Bool) -> (UInt64, Int)? {
+            guard i < n, b[i] != 0 else { return nil }
+            var len = 1
+            var mask: UInt8 = 0x80
+            while b[i] & mask == 0 { len += 1; mask >>= 1 }
+            guard len <= 8, i + len <= n else { return nil }
+            var v = UInt64(keepMarker ? b[i] : b[i] & (mask - 1))
+            for k in 1..<len { v = (v << 8) | UInt64(b[i + k]) }
+            return (v, len)
+        }
+        // Element header at i: (id, size, dataStart); size nil = unknown.
+        func element(_ i: Int) -> (UInt64, UInt64?, Int)? {
+            guard let (id, il) = vint(i, keepMarker: true),
+                  let (sz, sl) = vint(i + il, keepMarker: false) else { return nil }
+            let allOnes = sl == 8 ? UInt64.max >> 8 : (UInt64(1) << UInt64(7 * sl)) - 1
+            return (id, sz == allOnes ? nil : sz, i + il + sl)
+        }
+
+        var out: [Int64] = []
+        guard let (ebml, ebmlSize, ebmlData) = element(0), ebml == 0x1A45DFA3, let es = ebmlSize else { return out }
+        var i = ebmlData + Int(es)
+        guard let (seg, segSize, segData) = element(i), seg == 0x18538067 else { return out }
+        let segEnd = segSize.map { min(segData + Int($0), n) } ?? n
+        i = segData
+        while i < segEnd, let (id, size, data) = element(i) {
+            if id == 0x1F43B675 { break }                 // first Cluster: past the header
+            guard let sz = size else { break }
+            let end = data + Int(sz)
+            if id == 0x1654AE6B {                         // Tracks
+                var t = data
+                while t < min(end, n), let (tid, tsz, tdata) = element(t), let ts = tsz {
+                    let tend = tdata + Int(ts)
+                    if tid == 0xAE {                      // TrackEntry
+                        var e = tdata
+                        while e < min(tend, n), let (eid, esz, edata) = element(e), let ez = esz {
+                            if eid == 0x83, ez == 1, edata < n, b[edata] == 0x11 { out.append(Int64(edata)) }
+                            e = edata + Int(ez)
+                        }
+                    }
+                    t = tend
+                }
+                break
+            }
+            i = end
+        }
+        return out
     }
 }

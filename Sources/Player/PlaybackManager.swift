@@ -114,6 +114,8 @@ final class PlaybackManager: NSObject, ObservableObject {
     private var castLastMove = Date()       // when that spot last changed
     private var castStarved = false         // the screen ran out of loaded video (dead zone)
     private var castRecoveries = 0          // handed over again after running dry, for this video
+    /// Casting: the file's subtitle tracks are hidden from the screen unless you turn them on here.
+    @Published private(set) var castSubtitlesOn = false
     private let keepAlive = KeepAlive()
     private var castFailures = 0
     private var proxy: StreamProxy?
@@ -253,6 +255,7 @@ final class PlaybackManager: NSObject, ObservableObject {
             wantsPlay = true
             castRestarts = 0
             castRecoveries = 0
+            if current?.ratingKey.value != castSubtitlesKey { castSubtitlesOn = false }
             startCast(at: resume)
         } else if Self.airPlayRouteName() != nil { startAV(at: resume) } else { startVLC(at: resume) }
         startTimers()
@@ -1170,6 +1173,7 @@ final class PlaybackManager: NSObject, ObservableObject {
                 if let p = proxy, let local = await p.ensureListening() {
                     url = local
                     castFromCache = true
+                    p.setHideSubtitles(!castSubtitlesOn)
                 } else {
                     url = c.directURL(for: item)
                     castFromCache = false
@@ -1303,6 +1307,19 @@ final class PlaybackManager: NSObject, ObservableObject {
                 castFailed("\(dev.name) couldn't play this video.")
             }
         }
+    }
+
+    private var castSubtitlesKey: String?
+
+    /// Casting: show or hide the file's subtitles on the screen. Hands the video over again at the same
+    /// spot (the screen reads the track list only when it opens the video).
+    func setCastSubtitles(_ on: Bool) {
+        guard castDevice != nil, on != castSubtitlesOn else { return }
+        castSubtitlesOn = on
+        castSubtitlesKey = current?.ratingKey.value
+        IceLog.info("CAST: subtitles \(on ? "available" : "hidden") on the screen; handing it the video again at \(ts(currentTime))")
+        wantsPlay = true
+        startCast(at: currentTime)
     }
 
     /// Casting from Ice's cache through a dead zone: when the screen runs out it may give up on the
