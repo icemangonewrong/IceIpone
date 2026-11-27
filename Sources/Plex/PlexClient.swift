@@ -296,6 +296,39 @@ final class PlexClient {
         return comps?.url
     }
 
+    /// Downloads a subtitle file into Caches/subtitles and returns where it is (nil if it can't be had).
+    /// Plex's first answer for a subtitle it just downloaded can come back broken (it sends Content-Length
+    /// twice and nginx turns that into a 502), so a failed try waits and asks again.
+    func localSubtitle(_ key: String, tries: Int = 4) async -> URL? {
+        let folder = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("subtitles", isDirectory: true)
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        var last = ""
+        for n in 1...tries {
+            do {
+                let data = try await serverGET(key)
+                if !data.isEmpty {
+                    let head = String(decoding: data.prefix(400), as: UTF8.self).lowercased()
+                    let ext = head.contains("[script info]") ? "ass"
+                        : head.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("webvtt") ? "vtt"
+                        : head.contains("<sami") ? "smi" : "srt"
+                    let name = key.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+                        .replacingOccurrences(of: "/", with: "_")
+                    let file = folder.appendingPathComponent("\(name).\(ext)")
+                    try data.write(to: file, options: .atomic)
+                    if n > 1 { IceLog.info("Subtitle \(key): got it on try \(n) (\(last))") }
+                    return file
+                }
+                last = "empty answer"
+            } catch {
+                last = "\(error)"
+            }
+            IceLog.info("Subtitle \(key): try \(n) failed (\(last))")
+            if n < tries { try? await Task.sleep(nanoseconds: UInt64(1_500_000_000 * Double(n))) }
+        }
+        return nil
+    }
+
     func search(_ text: String) async throws -> [PlexItem] {
         let data = try await serverGET("/hubs/search", query: [
             URLQueryItem(name: "query", value: text),

@@ -77,6 +77,8 @@ final class PlaybackManager: NSObject, ObservableObject {
     private var audioCheckUntil = Date.distantPast
     private var plexEmbeddedSubtitle: Int?       // 1 = first subtitle track inside the file
     private var plexExternalSubtitle: URL?
+    /// Subtitle files fetched to the phone (server address → local copy); VLC is given the local copy.
+    private var subtitleFiles: [URL: URL] = [:]
     private var routeObserver: NSObjectProtocol?
     private var toastTask: Task<Void, Never>?
 
@@ -200,6 +202,7 @@ final class PlaybackManager: NSObject, ObservableObject {
         audioCheckUntil = Date().addingTimeInterval(25)
         plexEmbeddedSubtitle = nil
         plexExternalSubtitle = nil
+        subtitleFiles = [:]
         subtitleDelayMs = 0
         duration = Double(target.duration ?? 0) / 1000
         var resume = fromStart ? 0 : Double(target.viewOffset ?? 0) / 1000
@@ -806,9 +809,16 @@ final class PlaybackManager: NSObject, ObservableObject {
             markers = (full?.Marker ?? []).filter { $0.isIntro || $0.isCredits }
             nextItem = next
             let streams = full?.firstPart?.Stream ?? []
-            pendingSubtitles = streams.filter { $0.isExternalSubtitle }.compactMap { s in
-                s.key.flatMap { c.streamURL($0) }
+            let subKeys = streams.filter { $0.isExternalSubtitle }.compactMap { $0.key }
+            // Fetched here with retries (Plex's first answer for a new subtitle can be broken, and VLC gives
+            // up on the first error); VLC gets the copy on the phone.
+            var files: [URL: URL] = [:]
+            for k in subKeys {
+                if let remote = c.streamURL(k), let local = await c.localSubtitle(k) { files[remote] = local }
             }
+            guard current?.ratingKey == item.ratingKey else { return }
+            subtitleFiles.merge(files) { _, new in new }
+            pendingSubtitles = subKeys.compactMap { c.streamURL($0) }
             // Subtitles stay off until you turn one on here (Plex's per-video choice isn't used).
             if hasPlayedSinceStart {
                 applySubtitleChoice()
@@ -824,7 +834,7 @@ final class PlaybackManager: NSObject, ObservableObject {
         for url in subs {
             let chosen = pickedSubtitle == nil && url == plexExternalSubtitle
             if chosen { pickedSubtitle = Self.subtitleLoading }
-            _ = vlc.addPlaybackSlave(url, type: .subtitle, enforce: chosen)
+            _ = vlc.addPlaybackSlave(subtitleFiles[url] ?? url, type: .subtitle, enforce: chosen)
             if chosen { rememberSubtitleWhenLoaded() }
         }
         objectWillChange.send()
@@ -1441,12 +1451,18 @@ final class PlaybackManager: NSObject, ObservableObject {
                     if let s = streams.last(where: { $0.isExternalSubtitle && !before.contains($0.key ?? "") }) { found = s; break }
                 }
                 guard current?.ratingKey.value == key else { return }
-                guard let s = found, let k = s.key, let url = c.streamURL(k) else {
+                guard let s = found, let k = s.key else {
                     showToast("The server didn't get those subtitles. Try another one.")
                     return
                 }
+                guard let file = await c.localSubtitle(k), current?.ratingKey.value == key else {
+                    if current?.ratingKey.value == key {
+                        showToast("The server has them but won't send them right now. Try again in a moment.")
+                    }
+                    return
+                }
                 pickedSubtitle = Self.subtitleLoading
-                _ = vlc?.addPlaybackSlave(url, type: .subtitle, enforce: true)
+                _ = vlc?.addPlaybackSlave(file, type: .subtitle, enforce: true)
                 rememberSubtitleWhenLoaded()
                 objectWillChange.send()
                 showToast("Subtitles: \(sub.name)")
