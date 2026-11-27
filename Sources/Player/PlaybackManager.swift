@@ -816,7 +816,7 @@ final class PlaybackManager: NSObject, ObservableObject {
             for k in subKeys {
                 if let remote = c.streamURL(k), let local = await c.localSubtitle(k) { files[remote] = local }
             }
-            guard current?.ratingKey == item.ratingKey else { return }
+            guard self.current?.ratingKey == item.ratingKey else { return }
             subtitleFiles.merge(files) { _, new in new }
             pendingSubtitles = subKeys.compactMap { c.streamURL($0) }
             // Subtitles stay off until you turn one on here (Plex's per-video choice isn't used).
